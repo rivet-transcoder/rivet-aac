@@ -1,0 +1,43 @@
+rivet-aac — an AAC-LC encoder and decoder
+Copyright 2026 Ely Erin Fox
+
+This product is licensed under the Open Encoding Attribution License,
+Version 1.0 (see LICENSE.md). It is source-available, not open source: the
+attribution duty in §5 applies to commercial use; §4 requires this NOTICE to
+be carried forward with any distribution.
+
+------------------------------------------------------------------------------
+Provenance
+------------------------------------------------------------------------------
+
+The encoder and decoder are original implementations written from ISO/IEC
+13818-7 (MPEG-2 AAC) and ISO/IEC 14496-3 (MPEG-4 Audio) and published
+literature. They are not translations of, and do not derive from, any other
+AAC encoder's or decoder's source. The normative tables (the Huffman
+codebooks, the scalefactor band tables, TNS_MAX_BANDS) are reproduced from
+ISO/IEC 13818-7:2004; docs/PROVENANCE.md records the copy they were
+transcribed from and the owner's approval of it.
+
+The decoder is verified against ffmpeg's decoder, used only as a black box
+(a command-line tool whose PCM is compared); none of its code is included
+or was consulted. The test streams in tests/data were made by encoders run
+the same way, as command-line tools; they are encoder output only.
+
+------------------------------------------------------------------------------
+Patents
+------------------------------------------------------------------------------
+
+AAC may be subject to patent licensing in some jurisdictions; Via LA
+administers a licensing programme for AAC. This licence grants no rights
+under any patent, and the authors make no claim about whether a licence is
+needed for any use. Spectral band replication, parametric stereo and USAC
+(HE-AAC, HE-AAC v2, xHE-AAC) are not implemented: an HE-AAC stream decodes
+as its AAC-LC core.
+
+------------------------------------------------------------------------------
+Third-party components
+------------------------------------------------------------------------------
+
+thiserror (https://crates.io/crates/thiserror) — MIT OR Apache-2.0
+proptest (https://crates.io/crates/proptest), development dependency only — MIT OR Apache-2.0
+libfuzzer-sys (https://crates.io/crates/libfuzzer-sys), fuzzing harness only (fuzz/) — MIT OR Apache-2.0 OR NCSA
