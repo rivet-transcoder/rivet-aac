@@ -156,3 +156,20 @@ fn malformed_input_is_an_error_not_a_panic() {
         }
     }
 }
+
+/// A fill element whose escaped count is 0 carries 14 bytes (cnt 15 plus
+/// esc_count 0 minus 1): no arithmetic overflow on the way.
+#[test]
+fn a_fill_element_with_a_zero_escape_count_is_skipped() {
+    // FIL (110) cnt 15 (1111) esc_count 0, 14 zero bytes, END (111).
+    let mut bits = String::from("110") + "1111" + "00000000";
+    bits += &"0".repeat(14 * 8);
+    bits += "111";
+    while !bits.len().is_multiple_of(8) {
+        bits.push('0');
+    }
+    let au: Vec<u8> = (0..bits.len() / 8).map(|i| u8::from_str_radix(&bits[8 * i..8 * i + 8], 2).unwrap()).collect();
+    let mut dec = Decoder::new_raw(&[0x12, 0x08]).unwrap(); // LC 44.1 kHz mono
+    let f = dec.decode(&au).unwrap().remove(0);
+    assert!(f.samples.iter().all(|&v| v == 0.0));
+}

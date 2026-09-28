@@ -502,7 +502,8 @@ impl Decoder {
                 6 => {
                     let mut count = r.read(4)? as usize;
                     if count == 15 {
-                        count += r.read(8)? as usize - 1;
+                        // cnt += esc_count - 1, with esc_count possibly 0.
+                        count = 14 + r.read(8)? as usize;
                     }
                     if count > 0 {
                         // extension_type (Table 40): 1101 EXT_SBR_DATA,

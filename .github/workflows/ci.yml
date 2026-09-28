@@ -27,6 +27,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Tests
         run: cargo test --release
+      - name: Property tests with overflow checks (debug)
+        run: cargo test --test fuzz
 
   # The decoder is checked against an independent implementation, used only
   # as a black box: ffmpeg makes the test streams and decodes them, and the
