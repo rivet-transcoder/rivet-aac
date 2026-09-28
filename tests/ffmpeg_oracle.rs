@@ -34,8 +34,10 @@ fn have_ffmpeg() -> bool {
     false
 }
 
-fn scratch() -> PathBuf {
-    let d = std::env::temp_dir().join(format!("rivet-aac-oracle-{}", std::process::id()));
+/// A scratch directory of the test's own (the tests run in parallel, and
+/// each removes its directory when it is done).
+fn scratch(test: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("rivet-aac-oracle-{}-{test}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -125,10 +127,7 @@ fn ffmpeg_decode(path: &Path) -> (Vec<f32>, u32, usize, String) {
         .args(["-v", "error", "-i"])
         .arg(path)
         .args(["-f", "f32le", "-"]));
-    let samples = pcm
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect();
+    let samples = pcm.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
     (
         samples,
         field("sample_rate").parse().unwrap(),
@@ -176,26 +175,61 @@ fn esds_asc(file: &[u8]) -> Vec<u8> {
     file[i..i + len].to_vec()
 }
 
-/// The MP4's audio access units, located by ffprobe (a black box here too).
-fn mp4_packets(path: &Path, file: &[u8]) -> Vec<Vec<u8>> {
-    let out = String::from_utf8(run(Command::new("ffprobe")
-        .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pos,size", "-of", "default=nw=1"])
-        .arg(path)))
-    .unwrap();
-    let (mut pos, mut size) = (None, None);
-    let mut packets = Vec::new();
-    for line in out.lines() {
-        if let Some(v) = line.strip_prefix("pos=") {
-            pos = v.parse::<usize>().ok();
-        } else if let Some(v) = line.strip_prefix("size=") {
-            size = v.parse::<usize>().ok();
-        }
-        if let (Some(p), Some(s)) = (pos, size) {
-            packets.push(file[p..p + s].to_vec());
-            pos = None;
-            size = None;
+/// The boxes directly inside `data` (ISO/IEC 14496-12): `(type, body)`.
+fn boxes(data: &[u8]) -> Vec<([u8; 4], &[u8])> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 8 <= data.len() {
+        let size = u32::from_be_bytes(data[i..i + 4].try_into().unwrap()) as usize;
+        let kind: [u8; 4] = data[i + 4..i + 8].try_into().unwrap();
+        let (header, size) = match size {
+            1 => (16, u64::from_be_bytes(data[i + 8..i + 16].try_into().unwrap()) as usize),
+            0 => (8, data.len() - i),
+            n => (8, n),
+        };
+        out.push((kind, &data[i + header..i + size]));
+        i += size;
+    }
+    out
+}
+
+fn child<'a>(data: &'a [u8], path: &[&[u8; 4]]) -> &'a [u8] {
+    path.iter().fold(data, |d, want| {
+        boxes(d).into_iter().find(|(k, _)| k == *want).unwrap_or_else(|| panic!("no {:?}", want)).1
+    })
+}
+
+/// The MP4's access units, from its sample table (one audio track).
+fn mp4_packets(file: &[u8]) -> Vec<Vec<u8>> {
+    let stbl = child(file, &[b"moov", b"trak", b"mdia", b"minf", b"stbl"]);
+    let be = |b: &[u8], i: usize| u32::from_be_bytes(b[i..i + 4].try_into().unwrap()) as usize;
+    let stsz = child(stbl, &[b"stsz"]);
+    let (fixed, count) = (be(stsz, 4), be(stsz, 8));
+    let sizes: Vec<usize> = (0..count).map(|k| if fixed != 0 { fixed } else { be(stsz, 12 + 4 * k) }).collect();
+    let stsc = child(stbl, &[b"stsc"]);
+    let runs: Vec<(usize, usize)> = (0..be(stsc, 4)).map(|k| (be(stsc, 8 + 12 * k), be(stsc, 12 + 12 * k))).collect();
+    let offsets: Vec<usize> = match boxes(stbl).into_iter().find(|(k, _)| k == b"stco" || k == b"co64") {
+        Some((k, b)) if &k == b"stco" => (0..be(b, 4)).map(|c| be(b, 8 + 4 * c)).collect(),
+        Some((_, b)) => (0..be(b, 4))
+            .map(|c| u64::from_be_bytes(b[8 + 8 * c..16 + 8 * c].try_into().unwrap()) as usize)
+            .collect(),
+        None => panic!("no chunk offsets"),
+    };
+    let mut packets = Vec::with_capacity(count);
+    let mut sample = 0;
+    for (c, &offset) in offsets.iter().enumerate() {
+        let per_chunk = runs.iter().rev().find(|r| r.0 <= c + 1).map_or(0, |r| r.1);
+        let mut at = offset;
+        for _ in 0..per_chunk {
+            if sample == count {
+                break;
+            }
+            packets.push(file[at..at + sizes[sample]].to_vec());
+            at += sizes[sample];
+            sample += 1;
         }
     }
+    assert_eq!(packets.len(), count, "sample table");
     packets
 }
 
@@ -212,7 +246,7 @@ fn our_decode(path: &Path) -> Ours {
     let file = std::fs::read(path).unwrap();
     let is_mp4 = matches!(path.extension().and_then(|e| e.to_str()), Some("m4a" | "mp4"));
     let (mut dec, units) = if is_mp4 {
-        (Decoder::new_raw(&esds_asc(&file)).unwrap(), mp4_packets(path, &file))
+        (Decoder::new_raw(&esds_asc(&file)).unwrap(), mp4_packets(&file))
     } else {
         (Decoder::new_adts(), vec![file])
     };
@@ -483,7 +517,7 @@ fn agrees_with_ffmpeg_on_its_own_streams() {
     if !have_ffmpeg() {
         return;
     }
-    let dir = scratch();
+    let dir = scratch("own");
     let mut report = Vec::new();
     let mut failures = Vec::new();
     for case in cases() {
@@ -591,7 +625,7 @@ fn agrees_with_ffmpeg_on_kbd_windows_and_pulses() {
         return;
     }
     use aac::encode::{Encoder, EncoderConfig, Exercise, adts_frame};
-    let dir = scratch();
+    let dir = scratch("exercise");
     let mut report = Vec::new();
     for (rate, channels) in [(48_000u32, 2u8), (44_100, 1), (32_000, 6)] {
         for ex in [
