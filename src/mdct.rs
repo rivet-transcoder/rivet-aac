@@ -1,6 +1,6 @@
-//! The analysis filterbank: sine windows, the four window sequences of
-//! ISO/IEC 13818-7 subclause 15.3.2, and a forward MDCT computed through a
-//! quarter-length complex FFT.
+//! The filterbank's transforms: the encoder's MDCT and the decoder's IMDCT,
+//! both computed through a quarter-length complex FFT, and the window
+//! sequences of ISO/IEC 13818-7 subclause 15.3.2.
 //!
 //! The MDCT is the encoder's transform of Annex C.3.1.2,
 //!
@@ -21,7 +21,7 @@ use std::f64::consts::PI;
 
 /// `window_sequence` (Table 44).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum WindowSequence {
+pub(crate) enum WindowSequence {
     OnlyLong = 0,
     LongStart = 1,
     EightShort = 2,
@@ -112,8 +112,8 @@ impl Fft {
     }
 }
 
-/// Forward MDCT of `2m` windowed inputs to `m` coefficients.
-pub(super) struct Mdct {
+/// Forward MDCT of `2m` windowed inputs to `m` coefficients, and its inverse.
+pub(crate) struct Mdct {
     m: usize,
     fft: Fft,
     /// `exp(-i*pi*j/m)` for `j < m/2`.
@@ -154,8 +154,47 @@ impl Mdct {
             self.fold[n] = -f64::from(input[3 * h - 1 - n]) - f64::from(input[3 * h + n]);
             self.fold[h + n] = f64::from(input[n]) - f64::from(input[m - 1 - n]);
         }
-        // DCT-IV through an m/2-point complex FFT: with c[j] = v[2j] + i*v[m-1-2j],
-        // Y[k] = X[2k] - i*X[m-1-2k] = post[k] * FFT(c[j] * pre[j])[k].
+        self.dct4();
+        // The factor 2 of the standard's definition.
+        for (o, &v) in out.iter_mut().zip(&self.fold) {
+            *o = (2.0 * v) as f32;
+        }
+    }
+
+    /// The decoder's IMDCT (subclause 15.3.1) of `m` coefficients to `2m`
+    /// unwindowed samples,
+    ///
+    /// ```text
+    /// x[n] = 2/N * sum_{k=0}^{N/2-1} spec[k] cos(2*pi/N * (n + n0) * (k + 1/2)),  N = 2m
+    /// ```
+    ///
+    /// which is the DCT-IV of the spectrum, `u = DCT-IV(spec) / m`, unfolded
+    /// into the time-domain alias pattern `(u2, -rev(u2), -rev(u1), -u1)`.
+    pub fn inverse(&mut self, spec: &[f32], out: &mut [f32]) {
+        let m = self.m;
+        let h = m / 2;
+        debug_assert_eq!(spec.len(), m);
+        debug_assert_eq!(out.len(), 2 * m);
+        for (f, &x) in self.fold.iter_mut().zip(spec) {
+            *f = f64::from(x);
+        }
+        self.dct4();
+        let scale = 1.0 / m as f64;
+        let u = &self.fold;
+        for n in 0..h {
+            out[n] = (u[h + n] * scale) as f32;
+            out[h + n] = (-u[m - 1 - n] * scale) as f32;
+            out[m + n] = (-u[h - 1 - n] * scale) as f32;
+            out[m + h + n] = (-u[n] * scale) as f32;
+        }
+    }
+
+    /// `fold <- DCT-IV(fold)`, `X[k] = sum_n v[n] cos(pi/m * (n + 1/2) * (k + 1/2))`,
+    /// through an m/2-point complex FFT: with `c[j] = v[2j] + i*v[m-1-2j]`,
+    /// `X[2k] - i*X[m-1-2k] = post[k] * FFT(c[j] * pre[j])[k]`.
+    fn dct4(&mut self) {
+        let m = self.m;
+        let h = m / 2;
         for j in 0..h {
             let c = Cpx {
                 re: self.fold[2 * j],
@@ -166,67 +205,10 @@ impl Mdct {
         self.fft.run(&mut self.work);
         for k in 0..h {
             let y = self.work[k].mul(self.post[k]);
-            // The factor 2 of the standard's definition.
-            out[2 * k] = (2.0 * y.re) as f32;
-            out[m - 1 - 2 * k] = (-2.0 * y.im) as f32;
+            self.fold[2 * k] = y.re;
+            self.fold[m - 1 - 2 * k] = -y.im;
         }
     }
-}
-
-#[cfg(test)]
-impl Mdct {
-    /// The decoder's IMDCT (subclause 15.3.1) of `m` coefficients to `2m`
-    /// unwindowed samples, for the tests' reference decoder. The forward
-    /// path computes 2*DCT-IV(fold(x)); choosing an input whose fold is the
-    /// spectrum itself gives 2*DCT-IV(spec) = 2m*u, and the IMDCT output is
-    /// the time-domain alias pattern (u2, -rev(u2), -rev(u1), -u1).
-    pub fn inverse(&mut self, spec: &[f32], out: &mut [f32]) {
-        let m = self.m;
-        let h = m / 2;
-        let mut input = vec![0.0f32; 2 * m];
-        input[..h].copy_from_slice(&spec[h..]);
-        for n in 0..h {
-            input[3 * h + n] = -spec[n];
-        }
-        let mut dct = vec![0.0f32; m];
-        self.forward(&input, &mut dct);
-        let u: Vec<f32> = dct.iter().map(|v| v / (2 * m) as f32).collect();
-        for n in 0..h {
-            out[n] = u[h + n];
-            out[h + n] = -u[m - 1 - n];
-            out[m + n] = -u[h - 1 - n];
-            out[m + h + n] = -u[n];
-        }
-    }
-}
-
-/// Sine window of length `n` (subclause 15.3.2, window_shape 0).
-pub(super) fn sine_window(n: usize) -> Vec<f32> {
-    (0..n)
-        .map(|i| (PI / n as f64 * (i as f64 + 0.5)).sin() as f32)
-        .collect()
-}
-
-/// The 2048-sample analysis window of a long window sequence. Every window
-/// half this encoder uses is a sine half (it always signals window_shape 0),
-/// so the previous frame's shape never changes the left half.
-pub(super) fn long_window(seq: WindowSequence, long: &[f32], short: &[f32]) -> Vec<f32> {
-    let mut w = vec![0.0f32; 2048];
-    match seq {
-        WindowSequence::OnlyLong => w.copy_from_slice(long),
-        WindowSequence::LongStart => {
-            w[..1024].copy_from_slice(&long[..1024]);
-            w[1024..1472].fill(1.0);
-            w[1472..1600].copy_from_slice(&short[128..]);
-        }
-        WindowSequence::LongStop => {
-            w[448..576].copy_from_slice(&short[..128]);
-            w[576..1024].fill(1.0);
-            w[1024..].copy_from_slice(&long[1024..]);
-        }
-        WindowSequence::EightShort => unreachable!("short windows are applied per block"),
-    }
-    w
 }
 
 #[cfg(test)]
@@ -294,12 +276,24 @@ mod tests {
     }
 
     #[test]
+    fn fast_imdct_matches_the_definition() {
+        for m in [128usize, 1024] {
+            let spec = noise(m, 3 + m as u32);
+            let mut fast = vec![0.0f32; 2 * m];
+            Mdct::new(m).inverse(&spec, &mut fast);
+            for (n, (&a, b)) in fast.iter().zip(direct_imdct(&spec)).enumerate() {
+                assert!((f64::from(a) - b).abs() < 1e-5, "{m}: {n}: {a} vs {b}");
+            }
+        }
+    }
+
+    #[test]
     fn windowed_overlap_add_reconstructs_across_every_transition() {
         // ONLY_LONG -> LONG_START -> EIGHT_SHORT -> LONG_STOP -> ONLY_LONG,
         // analysed here and synthesised with the standard's IMDCT, windows and
         // overlap-add: the middle frames must come back sample for sample.
-        let long = sine_window(2048);
-        let short = sine_window(256);
+        let long = crate::tables::windows::sine(2048);
+        let short = crate::tables::windows::sine(256);
         let seqs = [
             WindowSequence::OnlyLong,
             WindowSequence::LongStart,
@@ -325,7 +319,7 @@ mod tests {
                     }
                 }
             } else {
-                let w = long_window(seq, &long, &short);
+                let w = crate::encode::long_window(seq, &long, &short);
                 let z: Vec<f32> = frame.iter().zip(&w).map(|(a, b)| a * b).collect();
                 let mut spec = vec![0.0f32; 1024];
                 long_mdct.forward(&z, &mut spec);

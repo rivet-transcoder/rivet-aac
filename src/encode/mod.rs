@@ -1,8 +1,8 @@
 //! AAC-LC encoder, written in this crate from the standards (ISO/IEC 13818-7
 //! and ISO/IEC 14496-3) and the published literature cited in each module;
-//! see `docs/decisions.md` for the provenance. Output is raw access units
-//! (one raw_data_block each) plus the AudioSpecificConfig for the MP4 `esds`;
-//! [`adts_frame`] wraps an access unit for MPEG-TS.
+//! see `docs/PROVENANCE.md`. Output is raw access units (one raw_data_block
+//! each) plus the AudioSpecificConfig for the MP4 `esds`; [`adts_frame`]
+//! wraps an access unit for MPEG-TS or a bare `.aac` file.
 //!
 //! Scope
 //! -----
@@ -10,11 +10,11 @@
 //!   long/short block switching, M/S stereo per scalefactor band, and a
 //!   constant-NMR rate loop with a bit reservoir (constant bit rate at the
 //!   decoder-buffer level; the per-frame size varies).
-//! - Coded at 22.05, 24, 32, 44.1 or 48 kHz; any other input rate is
-//!   resampled on the way in ([`coding_rate`]), the resampler's delay
-//!   trimmed so the output stays aligned with the input.
-//! - Channel configurations 1–7 (ISO/IEC 13818-7 Table 42), from rivet's
-//!   native (ffmpeg) channel order: mono, stereo, 3.0, 4.0, 5.0, 5.1, 7.1.
+//! - Coded at 22.05, 24, 32, 44.1 or 48 kHz ([`SUPPORTED_RATES`]); input at
+//!   any other rate is the caller's to resample, to [`coding_rate`] of it.
+//! - Channel configurations 1–7 (ISO/IEC 13818-7 Table 42), from the native
+//!   channel order (FL FR FC LFE BL BR SL SR, the decoder's `Speaker`
+//!   order): mono, stereo, 3.0, 4.0, 5.0, 5.1, 7.1.
 //!   Six and seven-channel layouts other than 5.1, and quad, have no
 //!   configuration and are rejected; the caller remaps them.
 //! - Not used: TNS, intensity stereo, PNS, the pulse tool. Each is optional
@@ -29,45 +29,44 @@
 //! on `1024k` — the span its eight short windows cover — and also needs
 //! frame `k+1`'s, since a long frame before a short one must be a
 //! LONG_START; so the encoder holds one frame of lookahead internally.
-//! Packet timestamps count from the first input frame's PTS in steps of
-//! 1024 samples, like the Opus encoder's: the priming is signalled apart
-//! from the timestamps.
+//! Access unit `k` is the `k`-th 1024 samples of the decoded stream; the
+//! priming is for the container to signal (an MP4 edit list).
 
 mod bits;
-mod codebooks;
 mod huffman;
-mod mdct;
 mod psy;
 mod quant;
 mod syntax;
-mod tables;
 
 #[cfg(test)]
 mod tests;
 
-pub use syntax::{adts_frame, adts_header, audio_specific_config};
-pub use tables::SUPPORTED_RATES;
+pub use syntax::{Exercise, adts_frame, adts_header, audio_specific_config};
 
-use crate::audio::resample::AudioResampler;
-use crate::audio::{AudioEncoder, AudioError, AudioFrame, EncodedAudioPacket};
+use crate::error::{Error, Result};
+use crate::mdct::{Mdct, WindowSequence};
+use crate::tables::{self, RateTables, windows};
 
 use bits::BitWriter;
-use mdct::{Mdct, WindowSequence};
 use psy::{AttackDetector, BandPsy, Zone};
 use quant::{ChannelFrame, Layout, Quantized};
-use tables::RateTables;
 
-/// Samples per channel in one access unit.
-pub const FRAME_SAMPLES: usize = 1024;
+pub use crate::FRAME_SAMPLES;
 /// Priming samples at the start of the stream (one frame of MDCT overlap).
 pub const ENCODER_DELAY: u32 = 1024;
 
+/// The sampling rates this encoder codes. Other rates are the caller's to
+/// resample ([`coding_rate`] picks the target); the standard's rates below
+/// 22.05 kHz and above 48 kHz are left out on purpose (speech-band and
+/// high-resolution rates are not what AAC-LC delivery to the web needs).
+pub const SUPPORTED_RATES: [u32; 5] = [48_000, 44_100, 32_000, 24_000, 22_050];
+
 /// Encoder settings.
 #[derive(Clone, Debug)]
-pub struct AacConfig {
-    /// The input's sample rate; the stream is coded at [`coding_rate`] of it.
+pub struct EncoderConfig {
+    /// The sample rate, one of [`SUPPORTED_RATES`].
     pub sample_rate: u32,
-    /// 1, 2, 3, 4, 5, 6 or 8, in rivet's native channel order.
+    /// 1, 2, 3, 4, 5, 6 or 8, in the native channel order.
     pub channels: u8,
     /// Target bit rate in bits per second for all channels together; 0
     /// picks [`default_bitrate`].
@@ -142,7 +141,7 @@ type ElementSlots = (ElementKind, [usize; 2]);
 /// 5.1 = FL FR FC LFE BL BR, 7.1 = FL FR FC LFE BL BR SL SR.
 ///
 /// Configuration 7 is "centre, front pair, a second front pair (the outer
-/// one), surround pair, LFE"; rivet's 7.1 sends its side pair as that second
+/// one), surround pair, LFE"; a native 7.1 sends its side pair as that second
 /// pair and its back pair as the surround pair, so both pairs keep their
 /// front-to-back order.
 fn channel_elements(channels: u8) -> Option<(u8, Vec<ElementSlots>)> {
@@ -236,7 +235,7 @@ impl RateControl {
     }
 }
 
-pub struct AacEncoder {
+pub struct Encoder {
     tables: RateTables,
     channels: u8,
     channel_configuration: u8,
@@ -250,30 +249,26 @@ pub struct AacEncoder {
     psy_short: BandPsy,
     rc: RateControl,
     asc: [u8; 2],
-    /// The input's sample rate, and the resampler to the coding rate when
-    /// they differ, with the output frames of its delay still to drop.
-    in_rate: u32,
-    resampler: Option<AudioResampler>,
-    resample_skip: usize,
-    resampled: Vec<f32>,
-    /// Input sample frames received, per channel, at the input rate.
+    /// Sample frames received, per channel.
     samples_in: u64,
     frames_out: u64,
-    first_pts: Option<i64>,
     /// Test knob: never switch to short blocks.
     block_switching: bool,
+    exercise: Exercise,
 }
 
-impl AacEncoder {
-    pub fn new(config: AacConfig) -> Result<Self, AudioError> {
-        if config.sample_rate == 0 {
-            return Err(AudioError::Encode("input sample_rate is 0".to_string()));
+impl Encoder {
+    pub fn new(config: EncoderConfig) -> Result<Self> {
+        let rate = config.sample_rate;
+        if !SUPPORTED_RATES.contains(&rate) {
+            return Err(Error::Config(format!(
+                "the AAC encoder codes at {SUPPORTED_RATES:?} Hz, not {rate} Hz: resample to coding_rate({rate})"
+            )));
         }
-        let rate = coding_rate(config.sample_rate);
-        let tables = tables::rate_tables(rate).expect("coding_rate picks a coded rate");
+        let tables = tables::for_rate(rate).expect("every supported rate has tables");
         let (channel_configuration, layout) =
             channel_elements(config.channels).ok_or_else(|| {
-                AudioError::Unsupported(format!(
+                Error::Config(format!(
                     "AAC encoder has no channel configuration for {} channels \
                  (1, 2, 3, 4, 5, 6 and 8 are supported: mono, stereo, 3.0, 4.0, 5.0, 5.1, 7.1)",
                     config.channels
@@ -287,7 +282,7 @@ impl AacEncoder {
         };
         let (min_bitrate, max_bitrate) = bitrate_range(rate, config.channels);
         if bitrate < min_bitrate || bitrate > max_bitrate {
-            return Err(AudioError::Unsupported(format!(
+            return Err(Error::Config(format!(
                 "AAC bit rate {bitrate} b/s for {} channels at {rate} Hz (allowed {min_bitrate}..={max_bitrate})",
                 config.channels
             )));
@@ -326,26 +321,13 @@ impl AacEncoder {
             }
         }
 
-        let long = mdct::sine_window(2048);
-        let short = mdct::sine_window(256);
+        let long = windows::sine(2048);
+        let short = windows::sine(256);
         let long_windows = [
-            mdct::long_window(WindowSequence::OnlyLong, &long, &short),
-            mdct::long_window(WindowSequence::LongStart, &long, &short),
-            mdct::long_window(WindowSequence::LongStop, &long, &short),
+            long_window(WindowSequence::OnlyLong, &long, &short),
+            long_window(WindowSequence::LongStart, &long, &short),
+            long_window(WindowSequence::LongStop, &long, &short),
         ];
-        let (resampler, resample_skip) = if rate == config.sample_rate {
-            (None, 0)
-        } else {
-            (
-                Some(AudioResampler::new(
-                    config.sample_rate,
-                    rate,
-                    config.channels,
-                    1024,
-                )?),
-                resampler_delay(config.sample_rate, rate)?,
-            )
-        };
         let mean = u64::from(bitrate) * 1024 / u64::from(rate);
         let buffer = 6144 * i64::from(main_channels);
         Ok(Self {
@@ -372,14 +354,10 @@ impl AacEncoder {
                 log_pe_avg: 0.0,
                 lambda: 0.0,
             },
-            in_rate: config.sample_rate,
-            resample_skip,
-            resampler,
-            resampled: Vec::new(),
             samples_in: 0,
             frames_out: 0,
-            first_pts: None,
             block_switching: true,
+            exercise: Exercise::default(),
         })
     }
 
@@ -403,9 +381,61 @@ impl AacEncoder {
         self.channel_configuration
     }
 
-    #[cfg(test)]
-    fn disable_block_switching(&mut self) {
+    /// The configured channel count.
+    pub fn channels(&self) -> u8 {
+        self.channels
+    }
+
+    /// Never switch to short blocks: a test and measurement knob.
+    #[doc(hidden)]
+    pub fn disable_block_switching(&mut self) {
         self.block_switching = false;
+    }
+
+    /// Emit syntax this encoder does not otherwise use, for testing
+    /// decoders ([`Exercise`]).
+    #[doc(hidden)]
+    pub fn exercise(&mut self, ex: Exercise) {
+        self.exercise = ex;
+    }
+
+    /// Queue interleaved samples (`channels` per sample frame, in the
+    /// native channel order, full scale ±1.0) and return the access units
+    /// that became ready: one per 1024 samples, running one frame behind
+    /// the input for the block-switching lookahead.
+    pub fn encode(&mut self, samples: &[f32]) -> Vec<Vec<u8>> {
+        self.samples_in += (samples.len() / usize::from(self.channels)) as u64;
+        self.push(samples);
+        self.encode_ready()
+    }
+
+    /// End the stream: the access units that remain, enough that the
+    /// decoded output covers the priming plus every sample passed to
+    /// [`Self::encode`].
+    pub fn flush(&mut self) -> Vec<Vec<u8>> {
+        self.finish(self.samples_in)
+    }
+
+    /// [`Self::flush`] for a caller that knows how many of the samples it
+    /// passed are real (a resampler's padded tail is not): the output
+    /// covers the priming plus `samples`, padding with silence as needed.
+    pub fn finish(&mut self, samples: u64) -> Vec<Vec<u8>> {
+        let needed = if samples == 0 {
+            0
+        } else {
+            (samples + u64::from(ENCODER_DELAY)).div_ceil(FRAME_SAMPLES as u64)
+        };
+        let remaining = needed.saturating_sub(self.frames_out) as usize;
+        if remaining == 0 {
+            return Vec::new();
+        }
+        let want = 3 * FRAME_SAMPLES + (remaining - 1) * FRAME_SAMPLES;
+        for ch in &mut self.chans {
+            if ch.pcm.len() < want {
+                ch.pcm.resize(want, 0.0);
+            }
+        }
+        (0..remaining).map(|_| self.encode_frame()).collect()
     }
 
     /// Queue interleaved input (at the coding rate) per channel, in the
@@ -425,15 +455,7 @@ impl AacEncoder {
         }
     }
 
-    /// [`Self::push`] for the resampler's output, less its delay.
-    fn push_resampled(&mut self, samples: &[f32]) {
-        let n = usize::from(self.channels);
-        let skip = self.resample_skip.min(samples.len() / n);
-        self.resample_skip -= skip;
-        self.push(&samples[skip * n..]);
-    }
-
-    fn encode_ready(&mut self) -> Vec<EncodedAudioPacket> {
+    fn encode_ready(&mut self) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         while self.chans[0].pcm.len() >= 3 * FRAME_SAMPLES {
             out.push(self.encode_frame());
@@ -441,7 +463,7 @@ impl AacEncoder {
         out
     }
 
-    fn encode_frame(&mut self) -> EncodedAudioPacket {
+    fn encode_frame(&mut self) -> Vec<u8> {
         // Transients: this frame's zone (computed a frame ago, except at the
         // very start) and the next frame's.
         let mut next_zones = Vec::with_capacity(self.chans.len());
@@ -569,7 +591,13 @@ impl AacEncoder {
                         3,
                     );
                     w.put(u32::from(el.tag), 4);
-                    syntax::write_ics(&mut w, &frames[c], &coded[c], false);
+                    // An LFE always signals the sine window (13818-7 8.4).
+                    let ex = if el.kind == ElementKind::Lfe {
+                        Exercise { kbd_windows: false, ..self.exercise }
+                    } else {
+                        self.exercise
+                    };
+                    syntax::write_ics(&mut w, &frames[c], &coded[c], false, ex);
                 }
                 ElementKind::Cpe => {
                     let [a, b] = el.ch;
@@ -578,11 +606,11 @@ impl AacEncoder {
                     w.put(syntax::ID_CPE, 3);
                     w.put(u32::from(el.tag), 4);
                     w.put(1, 1); // common_window
-                    syntax::write_ics_info(&mut w, layout, max_sfb);
+                    syntax::write_ics_info(&mut w, layout, max_sfb, self.exercise);
                     let mode = syntax::ms_mask_mode(&ms[e], layout, max_sfb);
                     syntax::write_ms_mask(&mut w, mode, &ms[e], layout, max_sfb);
-                    syntax::write_ics(&mut w, &frames[a], &coded[a], true);
-                    syntax::write_ics(&mut w, &frames[b], &coded[b], true);
+                    syntax::write_ics(&mut w, &frames[a], &coded[a], true, self.exercise);
+                    syntax::write_ics(&mut w, &frames[b], &coded[b], true, self.exercise);
                 }
             }
         }
@@ -620,16 +648,8 @@ impl AacEncoder {
         for (ch, z) in self.chans.iter_mut().zip(next_zones) {
             ch.zone = Some(z);
         }
-        let first = self.first_pts.unwrap_or(0);
-        let pts = first
-            + (self.frames_out * FRAME_SAMPLES as u64 * 1_000_000 / u64::from(self.tables.rate))
-                as i64;
         self.frames_out += 1;
-        EncodedAudioPacket {
-            data,
-            pts,
-            duration: FRAME_SAMPLES as i64,
-        }
+        data
     }
 
     /// Transform one channel and compute its thresholds for `layout`.
@@ -827,32 +847,6 @@ impl AacEncoder {
     }
 }
 
-/// The delay, in output samples, of the resampler from `in_rate` to
-/// `out_rate`: where an impulse at the first input sample comes out. Measured
-/// rather than computed, so it holds whatever the filter's design.
-fn resampler_delay(in_rate: u32, out_rate: u32) -> Result<usize, AudioError> {
-    let mut r = AudioResampler::new(in_rate, out_rate, 1, 1024)?;
-    let mut impulse = vec![0.0f32; 1024];
-    impulse[0] = 1.0;
-    let mut out = Vec::new();
-    for samples in [impulse, vec![0.0; 1024]] {
-        let frame = AudioFrame {
-            samples,
-            sample_rate: in_rate,
-            channels: 1,
-            pts: 0,
-        };
-        r.process(&frame, &mut out)?;
-    }
-    Ok(out
-        .iter()
-        .enumerate()
-        .fold((0, 0.0f32), |best, (i, &v)| {
-            if v.abs() > best.1 { (i, v.abs()) } else { best }
-        })
-        .0)
-}
-
 fn two_mut<T>(v: &mut [T], a: usize, b: usize) -> (&mut T, &mut T) {
     assert!(a < b);
     let (lo, hi) = v.split_at_mut(b);
@@ -909,89 +903,24 @@ fn decide_ms(a: &mut ChannelFrame, b: &mut ChannelFrame) -> Vec<bool> {
     used
 }
 
-impl AudioEncoder for AacEncoder {
-    fn encode(&mut self, frame: &AudioFrame) -> Result<Vec<EncodedAudioPacket>, AudioError> {
-        if frame.channels != self.channels {
-            return Err(AudioError::Encode(format!(
-                "channel count mismatch: encoder configured for {}, frame has {}",
-                self.channels, frame.channels
-            )));
+/// The 2048-sample analysis window of a long window sequence. Every window
+/// half this encoder uses is a sine half (it always signals window_shape 0),
+/// so the previous frame's shape never changes the left half.
+pub(crate) fn long_window(seq: WindowSequence, long: &[f32], short: &[f32]) -> Vec<f32> {
+    let mut w = vec![0.0f32; 2048];
+    match seq {
+        WindowSequence::OnlyLong => w.copy_from_slice(long),
+        WindowSequence::LongStart => {
+            w[..1024].copy_from_slice(&long[..1024]);
+            w[1024..1472].fill(1.0);
+            w[1472..1600].copy_from_slice(&short[128..]);
         }
-        if frame.sample_rate != self.in_rate {
-            return Err(AudioError::Encode(format!(
-                "sample rate mismatch: encoder configured for {}, frame has {}",
-                self.in_rate, frame.sample_rate
-            )));
+        WindowSequence::LongStop => {
+            w[448..576].copy_from_slice(&short[..128]);
+            w[576..1024].fill(1.0);
+            w[1024..].copy_from_slice(&long[1024..]);
         }
-        if self.first_pts.is_none() {
-            self.first_pts = Some(frame.pts);
-        }
-        self.samples_in += (frame.samples.len() / usize::from(self.channels)) as u64;
-        match self.resampler.as_mut() {
-            None => self.push(&frame.samples),
-            Some(r) => {
-                let mut out = std::mem::take(&mut self.resampled);
-                out.clear();
-                r.process(frame, &mut out)?;
-                self.push_resampled(&out);
-                self.resampled = out;
-            }
-        }
-        Ok(self.encode_ready())
+        WindowSequence::EightShort => unreachable!("short windows are applied per block"),
     }
-
-    fn flush(&mut self) -> Result<Vec<EncodedAudioPacket>, AudioError> {
-        if let Some(mut r) = self.resampler.take() {
-            // Silence behind the input pushes the filter's delayed tail out.
-            let tail = AudioFrame {
-                samples: vec![0.0; r.chunk_size() * usize::from(self.channels)],
-                sample_rate: self.in_rate,
-                channels: self.channels,
-                pts: 0,
-            };
-            let mut out = Vec::new();
-            r.process(&tail, &mut out)?;
-            r.flush(&mut out)?;
-            self.push_resampled(&out);
-        }
-        // Enough frames that the decoder's output covers the priming plus
-        // every input sample (counted at the coding rate).
-        let coded = (u128::from(self.samples_in) * u128::from(self.tables.rate))
-            .div_ceil(u128::from(self.in_rate)) as u64;
-        let needed = if coded == 0 {
-            0
-        } else {
-            (coded + u64::from(ENCODER_DELAY)).div_ceil(FRAME_SAMPLES as u64)
-        };
-        let remaining = needed.saturating_sub(self.frames_out) as usize;
-        if remaining == 0 {
-            return Ok(Vec::new());
-        }
-        let want = 3 * FRAME_SAMPLES + (remaining - 1) * FRAME_SAMPLES;
-        for ch in &mut self.chans {
-            if ch.pcm.len() < want {
-                ch.pcm.resize(want, 0.0);
-            }
-        }
-        let mut out = Vec::with_capacity(remaining);
-        for _ in 0..remaining {
-            out.push(self.encode_frame());
-        }
-        Ok(out)
-    }
-
-    /// Priming samples at the stream's own rate (not 48 kHz ticks, as for
-    /// Opus): the muxer's edit list skips them.
-    fn pre_skip(&self) -> u16 {
-        ENCODER_DELAY as u16
-    }
-
-    /// The AudioSpecificConfig.
-    fn extra_data(&self) -> Vec<u8> {
-        self.asc.to_vec()
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.tables.rate
-    }
+    w
 }

@@ -8,26 +8,11 @@
 //! search space is at most 51 bands, so the exact answer is cheap.
 
 use super::bits::BitWriter;
-use super::codebooks::{SCALEFACTOR, SPECTRUM};
+use crate::tables::codebooks::{SCALEFACTOR, SPECTRUM};
 
-/// Table 59: `(unsigned, dimension, largest absolute value)` per codebook.
-const CODEBOOK: [(bool, usize, i32); 12] = [
-    (false, 0, 0),
-    (false, 4, 1),
-    (false, 4, 1),
-    (true, 4, 2),
-    (true, 4, 2),
-    (false, 2, 4),
-    (false, 2, 4),
-    (true, 2, 7),
-    (true, 2, 7),
-    (true, 2, 12),
-    (true, 2, 12),
-    (true, 2, 16),
-];
+use crate::tables::codebooks::PARAMS as CODEBOOK;
+pub(super) use crate::tables::codebooks::ESC_HCB;
 
-/// The escape codebook.
-pub(super) const ESC_HCB: u8 = 11;
 /// Codebook numbers that can code any band (0 only codes all-zero bands).
 pub(super) const NUM_CODEBOOKS: usize = 12;
 /// Largest quantized magnitude the syntax can carry (subclause 10.3).
@@ -203,42 +188,6 @@ pub(super) fn write_sections(w: &mut BitWriter, sections: &[Section], short: boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::encode::aac::codebooks;
-
-    fn check_complete_prefix_code(name: &str, book: &[(u8, u32)]) {
-        let mut kraft = 0f64;
-        let mut codes: Vec<String> = Vec::new();
-        for &(len, code) in book {
-            assert!(
-                len > 0 && len <= 32 && u64::from(code) < 1u64 << len,
-                "{name}"
-            );
-            kraft += 0.5f64.powi(i32::from(len));
-            codes.push(format!("{code:0width$b}", width = usize::from(len)));
-        }
-        assert!((kraft - 1.0).abs() < 1e-12, "{name}: Kraft sum {kraft}");
-        codes.sort();
-        for pair in codes.windows(2) {
-            assert!(
-                !pair[1].starts_with(&pair[0]),
-                "{name}: {} prefixes {}",
-                pair[0],
-                pair[1]
-            );
-        }
-    }
-
-    #[test]
-    fn every_codebook_is_a_complete_prefix_code_of_the_right_size() {
-        check_complete_prefix_code("scalefactor", &codebooks::SCALEFACTOR);
-        let sizes = [0, 81, 81, 81, 81, 81, 81, 64, 64, 169, 169, 289];
-        for cb in 1..12 {
-            assert_eq!(SPECTRUM[cb].len(), sizes[cb]);
-            check_complete_prefix_code(&format!("spectrum {cb}"), SPECTRUM[cb]);
-        }
-        // Spot checks against Table A.1: a zero difference is the one-bit '0'.
-        assert_eq!(codebooks::SCALEFACTOR[60], (1, 0));
-    }
 
     #[test]
     fn tuple_indices_follow_subclause_9_3() {

@@ -10,7 +10,7 @@
 
 /// Table A.1: scalefactor difference `d` is codeword index `d + 60`.
 #[rustfmt::skip]
-pub(super) const SCALEFACTOR: [(u8, u32); 121] = [
+pub const SCALEFACTOR: [(u8, u32); 121] = [
     (18, 0x3ffe8), (18, 0x3ffe6), (18, 0x3ffe7), (18, 0x3ffe5), (19, 0x7fff5), (19, 0x7fff1),
     (19, 0x7ffed), (19, 0x7fff6), (19, 0x7ffee), (19, 0x7ffef), (19, 0x7fff0), (19, 0x7fffc),
     (19, 0x7fffd), (19, 0x7ffff), (19, 0x7fffe), (19, 0x7fff7), (19, 0x7fff8), (19, 0x7fffb),
@@ -34,7 +34,7 @@ pub(super) const SCALEFACTOR: [(u8, u32); 121] = [
 
 /// Table A.2: spectrum Huffman codebook 1.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_1: [(u8, u32); 81] = [
+pub const SPECTRUM_1: [(u8, u32); 81] = [
     (11, 0x7f8), (9, 0x1f1), (11, 0x7fd), (10, 0x3f5), (7, 0x68), (10, 0x3f0), (11, 0x7f7),
     (9, 0x1ec), (11, 0x7f5), (10, 0x3f1), (7, 0x72), (10, 0x3f4), (7, 0x74), (5, 0x11),
     (7, 0x76), (9, 0x1eb), (7, 0x6c), (10, 0x3f6), (11, 0x7fc), (9, 0x1e1), (11, 0x7f1),
@@ -51,7 +51,7 @@ pub(super) const SPECTRUM_1: [(u8, u32); 81] = [
 
 /// Table A.3: spectrum Huffman codebook 2.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_2: [(u8, u32); 81] = [
+pub const SPECTRUM_2: [(u8, u32); 81] = [
     (9, 0x1f3), (7, 0x6f), (9, 0x1fd), (8, 0xeb), (6, 0x23), (8, 0xea), (9, 0x1f7), (8, 0xe8),
     (9, 0x1fa), (8, 0xf2), (6, 0x2d), (7, 0x70), (6, 0x20), (5, 0x6), (6, 0x2b), (7, 0x6e),
     (6, 0x28), (8, 0xe9), (9, 0x1f9), (7, 0x66), (8, 0xf8), (8, 0xe7), (6, 0x1b), (8, 0xf1),
@@ -67,7 +67,7 @@ pub(super) const SPECTRUM_2: [(u8, u32); 81] = [
 
 /// Table A.4: spectrum Huffman codebook 3.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_3: [(u8, u32); 81] = [
+pub const SPECTRUM_3: [(u8, u32); 81] = [
     (1, 0x0), (4, 0x9), (8, 0xef), (4, 0xb), (5, 0x19), (8, 0xf0), (9, 0x1eb), (9, 0x1e6),
     (10, 0x3f2), (4, 0xa), (6, 0x35), (9, 0x1ef), (6, 0x34), (6, 0x37), (9, 0x1e9), (9, 0x1ed),
     (9, 0x1e7), (10, 0x3f3), (9, 0x1ee), (10, 0x3ed), (13, 0x1ffa), (9, 0x1ec), (9, 0x1f2),
@@ -84,7 +84,7 @@ pub(super) const SPECTRUM_3: [(u8, u32); 81] = [
 
 /// Table A.5: spectrum Huffman codebook 4.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_4: [(u8, u32); 81] = [
+pub const SPECTRUM_4: [(u8, u32); 81] = [
     (4, 0x7), (5, 0x16), (8, 0xf6), (5, 0x18), (4, 0x8), (8, 0xef), (9, 0x1ef), (8, 0xf3),
     (11, 0x7f8), (5, 0x19), (5, 0x17), (8, 0xed), (5, 0x15), (4, 0x1), (8, 0xe2), (8, 0xf0),
     (7, 0x70), (10, 0x3f0), (9, 0x1ee), (8, 0xf1), (11, 0x7fa), (8, 0xee), (8, 0xe4),
@@ -100,7 +100,7 @@ pub(super) const SPECTRUM_4: [(u8, u32); 81] = [
 
 /// Table A.6: spectrum Huffman codebook 5.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_5: [(u8, u32); 81] = [
+pub const SPECTRUM_5: [(u8, u32); 81] = [
     (13, 0x1fff), (12, 0xff7), (11, 0x7f4), (11, 0x7e8), (10, 0x3f1), (11, 0x7ee), (11, 0x7f9),
     (12, 0xff8), (13, 0x1ffd), (12, 0xffd), (11, 0x7f1), (10, 0x3e8), (9, 0x1e8), (8, 0xf0),
     (9, 0x1ec), (10, 0x3ee), (11, 0x7f2), (12, 0xffa), (12, 0xff4), (10, 0x3ef), (9, 0x1f2),
@@ -117,7 +117,7 @@ pub(super) const SPECTRUM_5: [(u8, u32); 81] = [
 
 /// Table A.7: spectrum Huffman codebook 6.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_6: [(u8, u32); 81] = [
+pub const SPECTRUM_6: [(u8, u32); 81] = [
     (11, 0x7fe), (10, 0x3fd), (9, 0x1f1), (9, 0x1eb), (9, 0x1f4), (9, 0x1ea), (9, 0x1f0),
     (10, 0x3fc), (11, 0x7fd), (10, 0x3f6), (9, 0x1e5), (8, 0xea), (7, 0x6c), (7, 0x71),
     (7, 0x68), (8, 0xf0), (9, 0x1e6), (10, 0x3f7), (9, 0x1f3), (8, 0xef), (6, 0x32), (6, 0x27),
@@ -133,7 +133,7 @@ pub(super) const SPECTRUM_6: [(u8, u32); 81] = [
 
 /// Table A.8: spectrum Huffman codebook 7.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_7: [(u8, u32); 64] = [
+pub const SPECTRUM_7: [(u8, u32); 64] = [
     (1, 0x0), (3, 0x5), (6, 0x37), (7, 0x74), (8, 0xf2), (9, 0x1eb), (10, 0x3ed), (11, 0x7f7),
     (3, 0x4), (4, 0xc), (6, 0x35), (7, 0x71), (8, 0xec), (8, 0xee), (9, 0x1ee), (9, 0x1f5),
     (6, 0x36), (6, 0x34), (7, 0x72), (8, 0xea), (8, 0xf1), (9, 0x1e9), (9, 0x1f3), (10, 0x3f5),
@@ -147,7 +147,7 @@ pub(super) const SPECTRUM_7: [(u8, u32); 64] = [
 
 /// Table A.9: spectrum Huffman codebook 8.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_8: [(u8, u32); 64] = [
+pub const SPECTRUM_8: [(u8, u32); 64] = [
     (5, 0xe), (4, 0x5), (5, 0x10), (6, 0x30), (7, 0x6f), (8, 0xf1), (9, 0x1fa), (10, 0x3fe),
     (4, 0x3), (3, 0x0), (4, 0x4), (5, 0x12), (6, 0x2c), (7, 0x6a), (7, 0x75), (8, 0xf8),
     (5, 0xf), (4, 0x2), (4, 0x6), (5, 0x14), (6, 0x2e), (7, 0x69), (7, 0x72), (8, 0xf5),
@@ -161,7 +161,7 @@ pub(super) const SPECTRUM_8: [(u8, u32); 64] = [
 
 /// Table A.10: spectrum Huffman codebook 9.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_9: [(u8, u32); 169] = [
+pub const SPECTRUM_9: [(u8, u32); 169] = [
     (1, 0x0), (3, 0x5), (6, 0x37), (8, 0xe7), (9, 0x1de), (10, 0x3ce), (10, 0x3d9), (11, 0x7c8),
     (11, 0x7cd), (12, 0xfc8), (12, 0xfdd), (13, 0x1fe4), (13, 0x1fec), (3, 0x4), (4, 0xc),
     (6, 0x35), (7, 0x72), (8, 0xea), (8, 0xed), (9, 0x1e2), (10, 0x3d1), (10, 0x3d3),
@@ -192,7 +192,7 @@ pub(super) const SPECTRUM_9: [(u8, u32); 169] = [
 
 /// Table A.11: spectrum Huffman codebook 10.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_10: [(u8, u32); 169] = [
+pub const SPECTRUM_10: [(u8, u32); 169] = [
     (6, 0x22), (5, 0x8), (6, 0x1d), (6, 0x26), (7, 0x5f), (8, 0xd3), (9, 0x1cf), (10, 0x3d0),
     (10, 0x3d7), (10, 0x3ed), (11, 0x7f0), (11, 0x7f6), (12, 0xffd), (5, 0x7), (4, 0x0),
     (4, 0x1), (5, 0x9), (6, 0x20), (7, 0x54), (7, 0x60), (8, 0xd5), (8, 0xdc), (9, 0x1d4),
@@ -220,7 +220,7 @@ pub(super) const SPECTRUM_10: [(u8, u32); 169] = [
 
 /// Table A.12: spectrum Huffman codebook 11.
 #[rustfmt::skip]
-pub(super) const SPECTRUM_11: [(u8, u32); 289] = [
+pub const SPECTRUM_11: [(u8, u32); 289] = [
     (4, 0x0), (5, 0x6), (6, 0x19), (7, 0x3d), (8, 0x9c), (8, 0xc6), (9, 0x1a7), (10, 0x390),
     (10, 0x3c2), (10, 0x3df), (11, 0x7e6), (11, 0x7f3), (12, 0xffb), (11, 0x7ec), (12, 0xffa),
     (12, 0xffe), (10, 0x38e), (5, 0x5), (4, 0x1), (5, 0x8), (6, 0x14), (7, 0x37), (7, 0x42),
@@ -265,7 +265,7 @@ pub(super) const SPECTRUM_11: [(u8, u32); 289] = [
 
 /// The spectrum codebooks by codebook number (index 0 unused).
 #[rustfmt::skip]
-pub(super) const SPECTRUM: [&[(u8, u32)]; 12] = [
+pub const SPECTRUM: [&[(u8, u32)]; 12] = [
     &[],
     &SPECTRUM_1,
     &SPECTRUM_2,
@@ -279,3 +279,64 @@ pub(super) const SPECTRUM: [&[(u8, u32)]; 12] = [
     &SPECTRUM_10,
     &SPECTRUM_11,
 ];
+
+/// Table 59: `(unsigned, dimension, largest absolute value)` per spectrum
+/// codebook number (index 0, the zero codebook, carries no values).
+pub const PARAMS: [(bool, usize, i32); 12] = [
+    (false, 0, 0),
+    (false, 4, 1),
+    (false, 4, 1),
+    (true, 4, 2),
+    (true, 4, 2),
+    (false, 2, 4),
+    (false, 2, 4),
+    (true, 2, 7),
+    (true, 2, 7),
+    (true, 2, 12),
+    (true, 2, 12),
+    (true, 2, 16),
+];
+
+/// The escape codebook, whose value 16 flags an escape sequence.
+pub const ESC_HCB: u8 = 11;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_complete_prefix_code(name: &str, book: &[(u8, u32)]) {
+        let mut kraft = 0f64;
+        let mut codes: Vec<String> = Vec::new();
+        for &(len, code) in book {
+            assert!(
+                len > 0 && len <= 32 && u64::from(code) < 1u64 << len,
+                "{name}"
+            );
+            kraft += 0.5f64.powi(i32::from(len));
+            codes.push(format!("{code:0width$b}", width = usize::from(len)));
+        }
+        assert!((kraft - 1.0).abs() < 1e-12, "{name}: Kraft sum {kraft}");
+        codes.sort();
+        for pair in codes.windows(2) {
+            assert!(
+                !pair[1].starts_with(&pair[0]),
+                "{name}: {} prefixes {}",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
+    #[test]
+    fn every_codebook_is_a_complete_prefix_code_of_the_right_size() {
+        check_complete_prefix_code("scalefactor", &SCALEFACTOR);
+        for cb in 1..12 {
+            let (unsigned, dim, lav) = PARAMS[cb];
+            let modulus = if unsigned { lav + 1 } else { 2 * lav + 1 } as usize;
+            assert_eq!(SPECTRUM[cb].len(), modulus.pow(dim as u32), "{cb}");
+            check_complete_prefix_code(&format!("spectrum {cb}"), SPECTRUM[cb]);
+        }
+        // Spot checks against Table A.1: a zero difference is the one-bit '0'.
+        assert_eq!(SCALEFACTOR[60], (1, 0));
+    }
+}

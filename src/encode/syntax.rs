@@ -22,10 +22,24 @@ pub(super) fn ics_info_bits(layout: &Layout) -> usize {
     }
 }
 
-pub(super) fn write_ics_info(w: &mut BitWriter, layout: &Layout, max_sfb: usize) {
+/// Syntax a decoder must handle that this encoder does not otherwise
+/// produce, emitted on request so a decoder can be tested against another
+/// on it. Both keep the stream valid: a KBD `window_shape` only changes the
+/// synthesis window (the analysis stays sine), and pulse data moves part of
+/// a coefficient's magnitude into the pulse tool, which restores it exactly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Exercise {
+    /// Signal window_shape 1 (KBD) in every frame (but an LFE's, which
+    /// 13818-7 subclause 8.4 keeps at the sine window).
+    pub kbd_windows: bool,
+    /// Carry up to four coefficients of each long window in pulse_data().
+    pub pulses: bool,
+}
+
+pub(super) fn write_ics_info(w: &mut BitWriter, layout: &Layout, max_sfb: usize, ex: Exercise) {
     w.put(0, 1); // ics_reserved_bit
     w.put(layout.seq as u32, 2);
-    w.put(0, 1); // window_shape: sine
+    w.put(u32::from(ex.kbd_windows), 1); // window_shape: sine unless exercising KBD
     if layout.short() {
         w.put(max_sfb as u32, 4);
         w.put(layout.grouping_bits(), 7);
@@ -36,13 +50,19 @@ pub(super) fn write_ics_info(w: &mut BitWriter, layout: &Layout, max_sfb: usize)
 }
 
 /// individual_channel_stream(common_window).
-pub(super) fn write_ics(w: &mut BitWriter, cf: &ChannelFrame, qz: &Quantized, common_window: bool) {
+pub(super) fn write_ics(
+    w: &mut BitWriter,
+    cf: &ChannelFrame,
+    qz: &Quantized,
+    common_window: bool,
+    ex: Exercise,
+) {
     let start = w.len_bits();
     let layout = &cf.layout;
     let nswb = layout.num_swb();
     w.put(qz.global_gain as u32, 8);
     if !common_window {
-        write_ics_info(w, layout, qz.max_sfb);
+        write_ics_info(w, layout, qz.max_sfb, ex);
     }
     for sections in &qz.sections {
         huffman::write_sections(w, sections, layout.short());
@@ -61,15 +81,41 @@ pub(super) fn write_ics(w: &mut BitWriter, cf: &ChannelFrame, qz: &Quantized, co
             last = sf;
         }
     }
-    w.put(0, 1); // pulse_data_present
+    let mut q = std::borrow::Cow::Borrowed(&qz.q[..]);
+    let pulses = if ex.pulses && !layout.short() {
+        pulse_candidates(qz, layout)
+    } else {
+        Vec::new()
+    };
+    if let Some(&(first, _)) = pulses.first() {
+        // pulse_data() (Table 21): the first offset counts from the start of
+        // the band holding the first pulse, the others from the previous one.
+        let start_sfb = (0..nswb).rfind(|&b| usize::from(layout.swb[b]) <= first).unwrap();
+        w.put(1, 1);
+        w.put(pulses.len() as u32 - 1, 2);
+        w.put(start_sfb as u32, 6);
+        let q = q.to_mut();
+        let mut at = usize::from(layout.swb[start_sfb]);
+        for &(k, amp) in &pulses {
+            w.put((k - at) as u32, 5);
+            w.put(amp as u32, 4);
+            at = k;
+            q[k] -= q[k].signum() * amp;
+        }
+    } else {
+        w.put(0, 1); // pulse_data_present
+    }
     w.put(0, 1); // tns_data_present
     w.put(0, 1); // gain_control_data_present
     for (g, sections) in qz.sections.iter().enumerate() {
         for s in sections {
             for sfb in s.start..s.end {
-                huffman::write_band(w, s.cb, &qz.q[layout.band(g, sfb)]);
+                huffman::write_band(w, s.cb, &q[layout.band(g, sfb)]);
             }
         }
+    }
+    if !pulses.is_empty() {
+        return; // the bit count is the rate loop's estimate no longer
     }
     debug_assert_eq!(
         w.len_bits() - start,
@@ -81,6 +127,27 @@ pub(super) fn write_ics(w: &mut BitWriter, cf: &ChannelFrame, qz: &Quantized, co
             },
         "ICS bit count drifted from the rate loop's estimate"
     );
+}
+
+/// Up to four coefficients of a long window to carry partly as pulses: in
+/// coded bands, magnitude at least 2 (so the reduced value keeps its sign),
+/// the first within 31 lines of its band's start and each next within 31
+/// lines of the one before.
+fn pulse_candidates(qz: &Quantized, layout: &Layout) -> Vec<(usize, i32)> {
+    let mut out: Vec<(usize, i32)> = Vec::new();
+    for sfb in 0..qz.max_sfb {
+        if qz.band_codebook(0, sfb) == 0 {
+            continue;
+        }
+        for k in layout.band(0, sfb) {
+            let v = qz.q[k].abs();
+            let from = out.last().map_or(usize::from(layout.swb[sfb]), |&(p, _)| p);
+            if v >= 2 && out.len() < 4 && k - from <= 31 {
+                out.push((k, (v - 1).min(15)));
+            }
+        }
+    }
+    out
 }
 
 /// The ms_mask_present value and mask for a channel pair: 0 (no M/S), 2

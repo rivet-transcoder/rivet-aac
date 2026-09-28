@@ -17,7 +17,7 @@
 use std::sync::OnceLock;
 
 use super::huffman::{self, MAX_QUANT, NUM_CODEBOOKS, Section};
-use super::mdct::WindowSequence;
+use crate::mdct::WindowSequence;
 
 const SF_OFFSET: i32 = 100;
 const MAGIC_NUMBER: f32 = 0.4054;
