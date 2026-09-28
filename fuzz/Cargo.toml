@@ -1,0 +1,29 @@
+[package]
+name = "rivet-aac-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rivet-aac = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "decode_adts"
+path = "fuzz_targets/decode_adts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_raw"
+path = "fuzz_targets/decode_raw.rs"
+test = false
+doc = false
+bench = false
