@@ -243,6 +243,11 @@ struct Ours {
 }
 
 fn our_decode(path: &Path) -> Ours {
+    our_decode_with(path, false)
+}
+
+/// `core_only`: decode an HE-AAC stream's AAC-LC core only.
+fn our_decode_with(path: &Path, core_only: bool) -> Ours {
     let file = std::fs::read(path).unwrap();
     let is_mp4 = matches!(path.extension().and_then(|e| e.to_str()), Some("m4a" | "mp4"));
     let (mut dec, units) = if is_mp4 {
@@ -250,6 +255,7 @@ fn our_decode(path: &Path) -> Ours {
     } else {
         (Decoder::new_adts(), vec![file])
     };
+    dec.set_core_only(core_only);
     let mut ours = Ours {
         samples: Vec::new(),
         rate: 0,
@@ -579,9 +585,9 @@ fn agrees_with_ffmpeg_on_committed_streams() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// HE-AAC and HE-AAC v2 decode as their AAC-LC core: half the rate ffmpeg
-/// (which does decode SBR) outputs, flagged, and the same signal below the
-/// core's bandwidth.
+/// HE-AAC and HE-AAC v2 decode as their AAC-LC core in core-only mode
+/// (`Decoder::set_core_only`): half the rate ffmpeg (which does decode SBR)
+/// outputs, flagged, and the same signal below the core's bandwidth.
 #[test]
 fn he_aac_decodes_as_its_core() {
     let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
@@ -594,7 +600,7 @@ fn he_aac_decodes_as_its_core() {
     let ffmpeg = have_ffmpeg();
     for path in paths {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let ours = our_decode(&path);
+        let ours = our_decode_with(&path, true);
         assert!(ours.he_aac, "{name}: not reported as HE-AAC");
         let rms = |x: &[f32]| (x.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>() / x.len() as f64).sqrt();
         let our_rms = rms(&ours.samples);
