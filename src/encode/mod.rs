@@ -32,7 +32,7 @@
 //! Access unit `k` is the `k`-th 1024 samples of the decoded stream; the
 //! priming is for the container to signal (an MP4 edit list).
 
-mod bits;
+pub(crate) mod bits;
 mod huffman;
 mod psy;
 mod quant;

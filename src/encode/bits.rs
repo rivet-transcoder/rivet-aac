@@ -2,7 +2,7 @@
 //! fields and Huffman codewords are all written most significant bit first).
 
 #[derive(Default)]
-pub(super) struct BitWriter {
+pub(crate) struct BitWriter {
     buf: Vec<u8>,
     /// Pending bits, right-aligned; `acc_bits` of them are valid.
     acc: u64,

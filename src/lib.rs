@@ -2,11 +2,11 @@
 //!
 //! - [`encode`]: an AAC-LC encoder — raw access units and the
 //!   AudioSpecificConfig, or ADTS.
-//! - [`decode`]: an AAC-LC decoder — ADTS or raw access units with an
-//!   AudioSpecificConfig; channel configurations 1–7 and
-//!   program_config_element layouts; every AAC-LC tool (window shapes and
-//!   block switching, M/S, intensity stereo, PNS, TNS, pulse data). HE-AAC
-//!   and HE-AAC v2 streams decode as their AAC-LC core, at the core's rate.
+//! - [`decode`]: an AAC-LC, HE-AAC and HE-AAC v2 decoder — ADTS or raw
+//!   access units with an AudioSpecificConfig; channel configurations 1–7
+//!   and program_config_element layouts; every AAC-LC tool (window shapes
+//!   and block switching, M/S, intensity stereo, PNS, TNS, pulse data),
+//!   spectral band replication and parametric stereo.
 //! - [`tables`]: the normative tables both share.
 //!
 //! PCM on both sides is interleaved `f32` at full scale ±1.0, in the channel
@@ -17,6 +17,7 @@ pub mod decode;
 pub mod encode;
 mod error;
 mod mdct;
+mod sbr;
 pub mod tables;
 
 pub use error::{Error, Result};
