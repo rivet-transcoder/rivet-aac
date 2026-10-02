@@ -21,9 +21,8 @@ pub mod object_type {
     pub const USAC: u8 = 42;
 }
 
-/// How the stream says it carries SBR (and PS) on top of its AAC-LC core.
-/// This crate never decodes either; the flag is how the caller learns that
-/// the output is the core only.
+/// How the stream's configuration says it carries SBR (and PS) on top of
+/// its AAC-LC core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SbrSignal {
     /// SBR is signalled: explicitly, in the AudioSpecificConfig (audio object
@@ -32,7 +31,7 @@ pub struct SbrSignal {
     /// Parametric stereo is signalled explicitly (object type 29, or the PS
     /// sync extension).
     pub explicit_ps: bool,
-    /// The output rate SBR would have produced, when the configuration says.
+    /// The SBR tool's output rate, when the configuration says.
     pub extension_rate: Option<u32>,
 }
 
@@ -44,7 +43,8 @@ pub struct AudioSpecificConfig {
     pub object_type: u8,
     /// The core's sampling_frequency_index (the one its tables use).
     pub sampling_index: u8,
-    /// The core's sampling rate: the rate this crate decodes to.
+    /// The core's sampling rate (an HE-AAC stream's output is the SBR
+    /// tool's, `sbr.extension_rate`).
     pub sample_rate: u32,
     /// channelConfiguration; 0 means `program_config` carries the layout.
     pub channel_configuration: u8,
