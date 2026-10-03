@@ -323,7 +323,7 @@ fn energy_gap_db(ours: &[f64], reference: &[f64]) -> (f64, f64) {
     let n = reference.len().min(ours.len());
     let whole = (10.0 * (e(&ours[..n]) / e(&reference[..n])).log10()).abs();
     let mut worst = 0.0f64;
-    for (k, r) in reference.chunks_exact(2048).enumerate() {
+    for (k, r) in reference.as_chunks::<2048>().0.iter().enumerate() {
         let Some(o) = ours.get(k * 2048..(k + 1) * 2048) else { break };
         let e = |x: &[f64]| x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64;
         let (eo, er) = (e(o), e(r));
