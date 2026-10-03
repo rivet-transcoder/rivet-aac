@@ -1,6 +1,6 @@
 # rivet-aac
 
-[![CI](https://github.com/rivet-transcoder/rivet-aac/actions/workflows/ci.yml/badge.svg)](https://github.com/rivet-transcoder/rivet-aac/actions/workflows/ci.yml)
+[![CI](https://github.com/safewords/rivet-aac/actions/workflows/ci.yml/badge.svg)](https://github.com/safewords/rivet-aac/actions/workflows/ci.yml)
 
 An **AAC-LC, HE-AAC and HE-AAC v2** encoder and decoder in Rust: no C, no
 system libraries, no build script, nothing to install on a build host.
@@ -12,7 +12,7 @@ LSB, and agrees with faad2's decoder to float rounding (130 dB or better) on
 every AAC-LC stream it was compared on (the figures are
 [below](#how-it-is-checked)).
 
-Written for the **[rivet](https://github.com/rivet-transcoder/rivet)**
+Written for the **[rivet](https://github.com/safewords/rivet)**
 transcoder, where it is the AAC codec on both sides: the encoder behind
 `audio=aac`, and the decoder that lets an AAC source be downmixed, filtered
 or transcoded to Opus, MP3, FLAC or ALAC. Usable on its own by anything that
@@ -24,7 +24,7 @@ dependency (`thiserror`), no features, no build script.
 
 ```toml
 [dependencies]
-aac = { package = "rivet-aac", git = "https://github.com/rivet-transcoder/rivet-aac", branch = "develop" }
+aac = { package = "rivet-aac", git = "https://github.com/safewords/rivet-aac", branch = "develop" }
 ```
 
 ## What it decodes
