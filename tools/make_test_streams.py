@@ -191,9 +191,12 @@ def mp4(units, asc, rate, channels, frame):
 
     dcd = desc(4, bytes([0x40, 0x15, 0, 0, 0]) + struct.pack(">II", 0, 0) + desc(5, asc))
     esds = full(b"esds", desc(3, b"\0\x01\0" + dcd + desc(6, b"\x02")))
+    # channelcount 2 and samplesize 16 whatever the layout, as ISO/IEC
+    # 14496-14 has them for MPEG-4 audio (the AudioSpecificConfig carries the
+    # layout; some readers refuse other values).
     mp4a = box(
         b"mp4a",
-        b"\0" * 6 + b"\0\x01" + b"\0" * 8 + struct.pack(">HH", channels, 16) + b"\0" * 4 + struct.pack(">I", min(rate, 65535) << 16) + esds,
+        b"\0" * 6 + b"\0\x01" + b"\0" * 8 + struct.pack(">HH", 2, 16) + b"\0" * 4 + struct.pack(">I", min(rate, 65535) << 16) + esds,
     )
     stsd = full(b"stsd", struct.pack(">I", 1) + mp4a)
     stts = full(b"stts", struct.pack(">III", 1, n, frame))
@@ -230,7 +233,7 @@ STREAMS = [
     ("fdk-lc-32000-mono-24k.aac", 32000, 1, "lc", 24000, "implicit"),
     ("fdk-lc-44100-stereo-vbr.m4a", 44100, 2, "lc", 0, "implicit"),
     ("fdk-lc-48000-5_1-256k.aac", 48000, 6, "lc", 256000, "implicit"),
-    ("fdk-lc-48000-7_1-448k.m4a", 48000, 8, "lc", 448000, "implicit"),
+    ("fdk-lc-48000-7_1-448k.aac", 48000, 8, "lc", 448000, "implicit"),
     ("fdk-lc-64000-stereo-192k.aac", 64000, 2, "lc", 192000, "implicit"),
     ("fdk-lc-88200-stereo-256k.aac", 88200, 2, "lc", 256000, "implicit"),
     ("fdk-lc-96000-stereo-256k.m4a", 96000, 2, "lc", 256000, "implicit"),

@@ -208,7 +208,7 @@ against faad's, the worst channel of each stream:
 
 | streams | made by | rates | layouts and tools | worst SNR | largest \|difference\| |
 |---|---|---|---|---|---|
-| 12, committed | fdk-aac | 8, 11.025, 12, 16, 22.05, 32, 44.1, 48, 64, 88.2, 96 kHz | mono to 7.1 (a PCE 7.1), CBR and VBR, ADTS and MP4; TNS, M/S, intensity, KBD | 130.9 dB (7.1; the others 132.3 dB or better) | 1.3e-6 |
+| 12, committed | fdk-aac | 8, 11.025, 12, 16, 22.05, 32, 44.1, 48, 64, 88.2, 96 kHz | mono to 7.1 (a PCE 7.1, in band), CBR and VBR, ADTS and MP4; TNS, M/S, intensity, KBD | 131.2 dB (7.1; the others 132.3 dB or better) | 1.2e-6 |
 | 41, at test time | this crate's encoder | 22.05–48 kHz | mono, stereo, 3.0, 4.0, 5.0, 5.1, 7.1; 32–320 kb/s | 132.0 dB | 2.4e-7 |
 | 9, at test time | this crate's encoder, exercising KBD and pulses | 32–48 kHz | mono, stereo, 5.1 | 133.7 dB | 2.2e-7 |
 | 4, committed | fdk-aac, HE-AAC | 44.1, 48 kHz | stereo, 5.1; implicit, backward-compatible and hierarchical signalling | 53.0 dB | 2.1e-2 |

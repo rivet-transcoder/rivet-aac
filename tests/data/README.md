@@ -29,7 +29,7 @@ FDK_AAC=/path/to/libfdk-aac.so.2 python3 tools/make_test_streams.py
 | `fdk-lc-32000-mono-24k.aac` | 32000 | mono | AAC-LC, CBR 24 kb/s, ADTS |
 | `fdk-lc-44100-stereo-vbr.m4a` | 44100 | stereo | AAC-LC, VBR mode 3, MP4 |
 | `fdk-lc-48000-5_1-256k.aac` | 48000 | 5.1 | AAC-LC, CBR 256 kb/s, ADTS |
-| `fdk-lc-48000-7_1-448k.m4a` | 48000 | 7.1 | AAC-LC, CBR 448 kb/s, MP4; MODE_7_1_REAR_SURROUND (a program_config_element) |
+| `fdk-lc-48000-7_1-448k.aac` | 48000 | 7.1 | AAC-LC, CBR 448 kb/s, ADTS; MODE_7_1_REAR_SURROUND (channel configuration 0, a program_config_element in the first raw data block) |
 | `fdk-lc-64000-stereo-192k.aac` | 64000 | stereo | AAC-LC, CBR 192 kb/s, ADTS |
 | `fdk-lc-88200-stereo-256k.aac` | 88200 | stereo | AAC-LC, CBR 256 kb/s, ADTS |
 | `fdk-lc-96000-stereo-256k.m4a` | 96000 | stereo | AAC-LC, CBR 256 kb/s, MP4 |
