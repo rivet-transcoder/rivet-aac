@@ -1,7 +1,7 @@
 //! The decoder against the MPEG-4 audio conformance bitstreams of ISO/IEC
-//! 14496-26 (second edition) for HE-AAC and HE-AAC v2, used as data: each
-//! stream is decoded and compared with its reference waveform from the same
-//! package. No other implementation runs here.
+//! 14496-26 (second edition) for AAC-LC, HE-AAC and HE-AAC v2, used as data:
+//! each stream is decoded and compared with its reference waveform from the
+//! same package. No other implementation runs here.
 //!
 //! The package is ISO's electronic insert (see `tools/fetch_conformance.py`,
 //! which extracts the streams and references this test reads). Point
@@ -12,7 +12,10 @@
 //!
 //! The criterion is ISO/IEC 14496-26's for a 16-bit decoder: against the
 //! reference, the RMS of the difference below `2^-15 / sqrt(12)` (full
-//! scale 1.0) and its largest magnitude at most `2^-14`.
+//! scale 1.0) and its largest magnitude at most `2^-14`. Streams with
+//! perceptual noise substitution, whose noise no two decoders generate
+//! alike, are held to the reference's energy instead: each channel's within
+//! 0.25 dB, every 2048-sample block's within 3 dB.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +24,12 @@ use aac::decode::Decoder;
 /// The 16-bit conformance limits.
 const RMS_LIMIT: f64 = 8.809_710_601_174_9e-6; // 2^-15 / sqrt(12)
 const MAX_LIMIT: f64 = 6.103_515_625e-5; // 2^-14
+
+/// Streams with perceptual noise substitution: the energy of each channel
+/// within this (dB) of the reference's, and of every 2048-sample block
+/// within the second.
+const PNS_WHOLE_LIMIT_DB: f64 = 0.25;
+const PNS_BLOCK_LIMIT_DB: f64 = 3.0;
 
 fn conformance_dir() -> Option<PathBuf> {
     match std::env::var_os("AAC_CONFORMANCE_DIR") {
@@ -180,7 +189,7 @@ fn read_wav(path: &Path) -> (u32, usize, Vec<f64>) {
 }
 
 /// Decode an MP4 conformance stream: `(rate, channels, samples)`.
-fn decode(path: &Path) -> (u32, usize, Vec<f64>) {
+fn decode(path: &Path) -> (u32, usize, Vec<f64>, bool) {
     let file = std::fs::read(path).unwrap();
     let stbl = audio_stbl(&file);
     let mut dec = Decoder::new_raw(&esds_asc(stbl)).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
@@ -203,8 +212,11 @@ fn decode(path: &Path) -> (u32, usize, Vec<f64>) {
         }
     }
     let t = dec.tool_use();
+    if std::env::var("AAC_CONFORMANCE_VERBOSE").is_ok() {
+        eprintln!("  {}: {t:?}", path.display());
+    }
     assert_eq!(t.sbr_errors, 0, "{}: {} SBR payloads did not parse", path.display(), t.sbr_errors);
-    (rate, channels, out)
+    (rate, channels, out, t.noise_bands > 0)
 }
 
 fn channel(x: &[f64], n: usize, c: usize) -> Vec<f64> {
@@ -227,13 +239,16 @@ struct Outcome {
     name: String,
     rms: f64,
     max: f64,
+    /// For a stream with perceptual noise substitution: the largest block
+    /// energy difference and the whole stream's, dB (see `check`).
+    pns_gap: Option<(f64, f64)>,
     pass: bool,
 }
 
 /// Compare a decoded stream with reference channels (one interleaved file,
 /// or one file per channel).
-fn check(name: &str, ours: (u32, usize, Vec<f64>), refs: &[(u32, usize, Vec<f64>)]) -> Outcome {
-    let (rate, n, samples) = ours;
+fn check(name: &str, ours: (u32, usize, Vec<f64>, bool), refs: &[(u32, usize, Vec<f64>)]) -> Outcome {
+    let (rate, n, samples, pns) = ours;
     let mut reference: Vec<Vec<f64>> = Vec::new();
     for (r_rate, r_n, r) in refs {
         assert_eq!(*r_rate, rate, "{name}: output rate");
@@ -248,10 +263,15 @@ fn check(name: &str, ours: (u32, usize, Vec<f64>), refs: &[(u32, usize, Vec<f64>
         eprintln!("  {name}: {clipped} samples beyond full scale, saturated as PCM");
     }
     let samples: Vec<f64> = samples.iter().map(|v| v.clamp(-1.0, 1.0 - 1.0 / 8_388_608.0)).collect();
-    let ours: Vec<Vec<f64>> = (0..n).map(|c| channel(&samples, n, c)).collect();
+    // The AAC-LC references start two frames in: they leave out the first
+    // 2048 samples a decoder outputs (the same offset for every AAC-LC
+    // stream; with it the agreement is to a thousandth of a 16-bit LSB). The
+    // SBR and PS references keep them.
+    let skip = if is_aac_lc(name) { 2048 } else { 0 };
+    let ours: Vec<Vec<f64>> = (0..n).map(|c| channel(&samples, n, c).split_off(skip.min(samples.len() / n.max(1)))).collect();
     // Channels of a multichannel reference split in files are matched by
     // their best agreement.
-    let (mut rms, mut max) = (0.0f64, 0.0f64);
+    let (mut rms, mut max, mut pns_gap, mut pns_whole) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
     let mut used = vec![false; n];
     for r in &reference {
         let (j, (cr, cm)) = ours
@@ -262,6 +282,16 @@ fn check(name: &str, ours: (u32, usize, Vec<f64>), refs: &[(u32, usize, Vec<f64>
             .min_by(|a, b| a.1.0.total_cmp(&b.1.0))
             .unwrap();
         used[j] = true;
+        if pns {
+            // Perceptual noise substitution fills its bands with noise of a
+            // given energy from a generator the standard leaves to the
+            // decoder: no two decoders' waveforms match there, so the
+            // channel is held to the reference's energy, block by block.
+            let (block, whole) = energy_gap_db(&ours[j], r);
+            pns_gap = pns_gap.max(block);
+            pns_whole = pns_whole.max(whole);
+            continue;
+        }
         if std::env::var("AAC_CONFORMANCE_VERBOSE").is_ok() {
             eprintln!("  {name}: reference channel matched by ours {j}: RMS {cr:.2e} max {cm:.2e}");
             let bad: std::collections::BTreeSet<usize> =
@@ -273,15 +303,52 @@ fn check(name: &str, ours: (u32, usize, Vec<f64>), refs: &[(u32, usize, Vec<f64>
         rms = rms.max(cr);
         max = max.max(cm);
     }
-    Outcome { name: name.to_string(), rms, max, pass: rms < RMS_LIMIT && max <= MAX_LIMIT }
+    if pns {
+        return Outcome {
+            name: name.to_string(),
+            rms: f64::NAN,
+            max: f64::NAN,
+            pns_gap: Some((pns_gap, pns_whole)),
+            pass: pns_gap < PNS_BLOCK_LIMIT_DB && pns_whole < PNS_WHOLE_LIMIT_DB,
+        };
+    }
+    Outcome { name: name.to_string(), rms, max, pns_gap: None, pass: rms < RMS_LIMIT && max <= MAX_LIMIT }
 }
 
-/// The reference files of a stream: `al_sbr_X.mp4` has `al_sbr_hq_X.wav`
+/// The largest difference (dB) between the energies of `ours` and
+/// `reference` over blocks of 2048 samples, where the reference is above
+/// -60 dB of full scale; and over the whole of the reference.
+fn energy_gap_db(ours: &[f64], reference: &[f64]) -> (f64, f64) {
+    let e = |x: &[f64]| x.iter().map(|v| v * v).sum::<f64>() / x.len().max(1) as f64;
+    let n = reference.len().min(ours.len());
+    let whole = (10.0 * (e(&ours[..n]) / e(&reference[..n])).log10()).abs();
+    let mut worst = 0.0f64;
+    for (k, r) in reference.chunks_exact(2048).enumerate() {
+        let Some(o) = ours.get(k * 2048..(k + 1) * 2048) else { break };
+        let e = |x: &[f64]| x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64;
+        let (eo, er) = (e(o), e(r));
+        if er > 1e-6 {
+            worst = worst.max((10.0 * (eo / er).log10()).abs());
+        }
+    }
+    (worst, whole)
+}
+
+/// An AAC-LC conformance stream: `alNN_RR` (not `al_sbr_*`).
+fn is_aac_lc(stem: &str) -> bool {
+    stem.strip_prefix("al").is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// The reference files of a stream: an AAC-LC `alNN_RR.mp4` has
+/// `alNN_RR.wav` or one file per channel (`alNN_RR_f00.wav`, `_s00`, `_b00`,
+/// `_l00` ...); `al_sbr_X.mp4` has `al_sbr_hq_X.wav`
 /// (high quality SBR) or `al_sbr_hq_X_f00.wav`... one per channel (or, for
 /// the `gen` streams, `al_sbr_X_f00.wav`...);
 /// `al_sbr_ps_NN[_new].mp4` has `al_sbr_ps_NN_ur.wav` (unrestricted PS).
 fn references(dir: &Path, stem: &str) -> Vec<PathBuf> {
-    let candidates: Vec<String> = if let Some(rest) = stem.strip_prefix("al_sbr_ps_") {
+    let candidates: Vec<String> = if is_aac_lc(stem) {
+        vec![stem.to_string()]
+    } else if let Some(rest) = stem.strip_prefix("al_sbr_ps_") {
         let n = &rest[..2];
         vec![format!("al_sbr_ps_{n}_ur")]
     } else if let Some(rest) = stem.strip_prefix("al_sbr_") {
@@ -311,7 +378,7 @@ fn references(dir: &Path, stem: &str) -> Vec<PathBuf> {
 }
 
 #[test]
-fn he_aac_conformance_streams_meet_the_16_bit_criterion() {
+fn conformance_streams_meet_the_16_bit_criterion() {
     let Some(dir) = conformance_dir() else { return };
     let mut streams: Vec<PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
@@ -338,10 +405,19 @@ fn he_aac_conformance_streams_meet_the_16_bit_criterion() {
             Err(e) => {
                 let msg = e.downcast_ref::<String>().cloned().unwrap_or_default();
                 eprintln!("{stem:<34} {msg}");
-                outcomes.push(Outcome { name: stem, rms: f64::NAN, max: f64::NAN, pass: false });
+                outcomes.push(Outcome { name: stem, rms: f64::NAN, max: f64::NAN, pns_gap: None, pass: false });
                 continue;
             }
         };
+        if let Some((block, whole)) = o.pns_gap {
+            eprintln!(
+                "{:<34} PNS: energy within {whole:.2} dB, every 2048-sample block within {block:.2} dB  {}",
+                o.name,
+                if o.pass { "pass" } else { "FAIL" }
+            );
+            outcomes.push(o);
+            continue;
+        }
         eprintln!(
             "{:<34} RMS {:.2e} ({:5.3} LSB16)  max {:.2e} ({:6.3} LSB16)  {}",
             o.name,

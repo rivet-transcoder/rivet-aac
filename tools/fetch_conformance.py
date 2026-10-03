@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Fetch the HE-AAC and HE-AAC v2 conformance streams of ISO/IEC 14496-26
-(second edition) and their reference waveforms, for tests/conformance.rs.
+"""Fetch the AAC-LC, HE-AAC and HE-AAC v2 conformance streams of ISO/IEC
+14496-26 (second edition) and their reference waveforms, for
+tests/conformance.rs.
 
 ISO publishes the conformance package as electronic inserts at
 https://standards.iso.org/iso-iec/14496/-26/ed-2/en/ (several large ZIP
@@ -11,10 +12,14 @@ directory:
     python3 tools/fetch_conformance.py DIR
     AAC_CONFORMANCE_DIR=DIR cargo test --release --test conformance
 
-The streams (compressedMp4.zip): the AAC-LC + SBR ones (al_sbr_*) with 1024-
-sample frames and channel configurations 1 to 6, and the PS ones
-(al_sbr_ps_*). The references (referencesWav.zip): the high quality SBR
-decoder's (al_sbr_hq_*) and the unrestricted PS decoder's (al_sbr_ps_*_ur).
+The streams (compressedMp4.zip): the AAC-LC ones (alNN_RR: ten test
+families at six rates each, between them all twelve rates from 8 to 96 kHz,
+and the up-to-48-channel al08 at 8 kHz; see LC_STREAMS), the AAC-LC + SBR
+ones (al_sbr_*) with 1024-sample frames and channel configurations 1 to 6,
+and the PS ones (al_sbr_ps_*). The references (referencesWav.zip): the AAC-LC streams' own
+(one file, or one per channel: alNN_RR_f00.wav, _b00, _s00, _l00 ...), the
+high quality SBR decoder's (al_sbr_hq_*) and the unrestricted PS decoder's
+(al_sbr_ps_*_ur).
 Nothing is decoded here; ISO's licence terms for the inserts apply to the
 files.
 """
@@ -43,6 +48,30 @@ STREAMS = [
     "al_sbr_sr_64_2_fsaac32", "al_sbr_sr_88_2_fsaac44", "al_sbr_sr_96_2_fsaac48",
     "al_sbr_twi_22_1_fsaac22", "al_sbr_twi_48_1_fsaac24",
 ] + [f"al_sbr_ps_0{n}{s}" for n in range(7) for s in ("", "_new")] + ["al_sbr_ps_03_sig1", "al_sbr_ps_03_sig2"]
+
+# AAC-LC: the ten families this decoder reads, each at six rates, the
+# families alternating between two sets of six so that all twelve rates are
+# covered; al08 (up to 48 channels) at 8 kHz only. Not fetched: the
+# 960-sample-frame `alNNsf_*` variants, al07 (coupling channel elements) and
+# al20 / al21 (channel configurations 11 and up), which this decoder refuses
+# by name, and al14 / al16, whose references have dynamic range control
+# applied, which this decoder does not do.
+LC_FAMILIES = (0, 1, 2, 3, 4, 5, 6, 17, 18, 19)
+LC_RATES = (("08", "12", "22", "32", "48", "88"), ("11", "16", "24", "44", "64", "96"))
+LC_STREAMS = [f"al{f:02}_{r}" for k, f in enumerate(LC_FAMILIES) for r in LC_RATES[k % 2]] + ["al08_08"]
+
+
+def lc_reference(name):
+    """Whether `name` is the reference of one of LC_STREAMS: `<stem>.wav`, or
+    one channel of it, `<stem>_<letter><two digits>.wav` (not the variants
+    with dynamic range control applied, or the stereo downmixes)."""
+    for stem in LC_STREAMS:
+        if name == stem + ".wav":
+            return True
+        rest = name[len(stem) + 1:-4] if name.startswith(stem + "_") and name.endswith(".wav") else ""
+        if len(rest) == 3 and rest[0].isalpha() and rest[1:].isdigit():
+            return True
+    return False
 
 
 def rng(url, a, b):
@@ -103,10 +132,13 @@ def extract(url, entry, dest):
 
 
 def fetch(archive, wanted, outdir):
+    """Extract the members whose base name `wanted` accepts (a set, or a
+    predicate)."""
     url = BASE + archive
+    accept = wanted if callable(wanted) else wanted.__contains__
     for entry in central_directory(url):
         base = entry[0].rsplit("/", 1)[-1]
-        if base in wanted and not os.path.exists(os.path.join(outdir, base)):
+        if accept(base) and not os.path.exists(os.path.join(outdir, base)):
             print("fetch", archive, base, flush=True)
             extract(url, entry, os.path.join(outdir, base))
 
@@ -114,7 +146,7 @@ def fetch(archive, wanted, outdir):
 def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "conformance"
     os.makedirs(outdir, exist_ok=True)
-    fetch("compressedMp4.zip", {s + ".mp4" for s in STREAMS}, outdir)
+    fetch("compressedMp4.zip", {s + ".mp4" for s in STREAMS + LC_STREAMS}, outdir)
     refs = set()
     for s in STREAMS:
         if s.startswith("al_sbr_ps_"):
@@ -124,7 +156,7 @@ def main():
             refs.add(f"al_sbr_hq_{rest}.wav")
             refs.update(f"al_sbr_hq_{rest}_f0{c}.wav" for c in range(6))
             refs.add(f"al_sbr_hq_{rest}_l00.wav")
-    fetch("referencesWav.zip", refs, outdir)
+    fetch("referencesWav.zip", lambda name: name in refs or lc_reference(name), outdir)
 
 
 if __name__ == "__main__":
