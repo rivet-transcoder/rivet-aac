@@ -1,4 +1,4 @@
-//! AAC-LC encoder, written in this crate from the standards (ISO/IEC 13818-7
+//! AAC-LC, HE-AAC and HE-AAC v2 encoder, written in this crate from the standards (ISO/IEC 13818-7
 //! and ISO/IEC 14496-3) and the published literature cited in each module;
 //! see `docs/PROVENANCE.md`. Output is raw access units (one raw_data_block
 //! each) plus the AudioSpecificConfig for the MP4 `esds`; [`adts_frame`]
@@ -19,6 +19,11 @@
 //!   configuration and are rejected; the caller remaps them.
 //! - Not used: TNS, intensity stereo, PNS, the pulse tool. Each is optional
 //!   for an encoder; leaving them out costs efficiency, never conformance.
+//! - HE-AAC and HE-AAC v2 ([`Encoder::with_profile`]): input at
+//!   [`HE_AAC_RATES`], an AAC-LC core at half the rate with spectral band
+//!   replication, and for v2 a stereo input as a mono core plus parametric
+//!   stereo (see the `sbr` module for what this encoder chooses).
+//!   [`HE_AAC_DELAY`] samples of priming at the output rate.
 //!
 //! Timing
 //! ------

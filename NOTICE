@@ -1,4 +1,4 @@
-rivet-aac — an AAC-LC encoder and decoder
+rivet-aac — an AAC-LC, HE-AAC and HE-AAC v2 encoder and decoder
 Copyright 2026 Ely Erin Fox
 
 This product is licensed under the Open Encoding Attribution License,
@@ -15,24 +15,30 @@ The encoder and decoder are original implementations written from ISO/IEC
 literature. They are not translations of, and do not derive from, any other
 AAC encoder's or decoder's source. The normative tables (the Huffman
 codebooks, the scalefactor band tables, TNS_MAX_BANDS) are reproduced from
-ISO/IEC 13818-7:2004; docs/PROVENANCE.md records the copy they were
-transcribed from and the owner's approval of it.
+ISO/IEC 13818-7:2004; the SBR and parametric stereo tables (the Huffman
+tables, the QMF window, the noise table, the hybrid filter prototypes and
+band maps) from ISO/IEC 14496-3:2009. docs/PROVENANCE.md records the copies
+they were transcribed from.
 
-The decoder is verified against ffmpeg's decoder, used only as a black box
-(a command-line tool whose PCM is compared); none of its code is included
-or was consulted. The test streams in tests/data were made by encoders run
-the same way, as command-line tools; they are encoder output only.
+The AAC-LC decoder is verified against ffmpeg's decoder, used only as a
+black box (a command-line tool whose PCM is compared); none of its code is
+included or was consulted. The test streams in tests/data were made by
+encoders run the same way, as command-line tools; they are encoder output
+only. The HE-AAC / HE-AAC v2 decoder is verified against the conformance
+streams and reference waveforms of ISO/IEC 14496-26, which are not part of
+this repository: tools/fetch_conformance.py downloads them from ISO, under
+ISO's terms for its electronic inserts.
 
 ------------------------------------------------------------------------------
 Patents
 ------------------------------------------------------------------------------
 
-AAC may be subject to patent licensing in some jurisdictions; Via LA
-administers a licensing programme for AAC. This licence grants no rights
-under any patent, and the authors make no claim about whether a licence is
-needed for any use. Spectral band replication, parametric stereo and USAC
-(HE-AAC, HE-AAC v2, xHE-AAC) are not implemented: an HE-AAC stream decodes
-as its AAC-LC core.
+AAC, HE-AAC and HE-AAC v2 may be subject to patent licensing in some
+jurisdictions; Via LA administers licensing programmes for AAC and HE-AAC.
+This licence grants no rights under any patent, and the authors make no
+claim about whether a licence is needed for any use. Spectral band
+replication and parametric stereo (HE-AAC, HE-AAC v2) are implemented; USAC
+(xHE-AAC) is not.
 
 ------------------------------------------------------------------------------
 Third-party components

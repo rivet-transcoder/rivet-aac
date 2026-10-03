@@ -357,3 +357,64 @@ fn he_aac_conformance_streams_meet_the_16_bit_criterion() {
     eprintln!("{} of {} streams within the 16-bit criterion", outcomes.len() - failed.len(), outcomes.len());
     assert!(failed.is_empty(), "outside the criterion: {failed:?}");
 }
+
+/// The committed HE-AAC and HE-AAC v2 streams of `tests/data` (made by
+/// fdk-aac; data only) decode in full: at twice the core's rate, two
+/// channels from the v2 streams' mono core, and with signal above the
+/// core's Nyquist frequency (the test signal's noise bursts and clicks reach
+/// there), where the core-only decode can have none.
+#[test]
+fn committed_he_aac_streams_decode_with_sbr_and_ps() {
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(&data).unwrap().map(|e| e.unwrap().path()).collect();
+    paths.retain(|p| p.file_name().unwrap().to_string_lossy().starts_with("he-"));
+    paths.sort();
+    assert_eq!(paths.len(), 6);
+    for path in paths {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let file = std::fs::read(&path).unwrap();
+        let decode = |core_only: bool| {
+            let (mut dec, units) = if name.ends_with(".m4a") {
+                let stbl = audio_stbl(&file);
+                (Decoder::new_raw(&esds_asc(stbl)).unwrap(), mp4_packets(&file, stbl))
+            } else {
+                (Decoder::new_adts(), vec![file.clone()])
+            };
+            dec.set_core_only(core_only);
+            let mut frames = Vec::new();
+            for u in &units {
+                frames.extend(dec.decode(u).unwrap());
+            }
+            assert_eq!(dec.tool_use().sbr_errors, 0, "{name}");
+            let last = frames.last().unwrap();
+            let (rate, n) = (last.sample_rate, last.channels);
+            let samples: Vec<f64> = frames.iter().filter(|f| f.channels == n).flat_map(|f| f.samples.iter().map(|&v| f64::from(v))).collect();
+            (rate, n, samples, dec.he_aac())
+        };
+        let (rate, n, full, he) = decode(false);
+        let (core_rate, core_n, _, _) = decode(true);
+        let he = he.unwrap_or_else(|| panic!("{name}: not HE-AAC"));
+        assert_eq!(rate, 2 * core_rate, "{name}");
+        let v2 = name.starts_with("he-aac-v2");
+        assert_eq!(he.parametric_stereo, v2, "{name}");
+        assert_eq!(n, if v2 { 2 } else { core_n }, "{name}");
+        // The share of the full decode's power above the core's Nyquist
+        // frequency (a 512-point DFT over 40 blocks of the first channel).
+        let c = channel(&full, n, 0);
+        let (mut low, mut high) = (0.0f64, 0.0f64);
+        for block in c.as_chunks::<512>().0.iter().skip(10).take(40) {
+            for k in 1..256 {
+                let (mut re, mut im) = (0.0, 0.0);
+                for (i, &v) in block.iter().enumerate() {
+                    let ph = 2.0 * std::f64::consts::PI * (k * i) as f64 / 512.0;
+                    re += v * ph.cos();
+                    im += v * ph.sin();
+                }
+                if k >= 128 { high += re * re + im * im } else { low += re * re + im * im }
+            }
+        }
+        let share_db = 10.0 * (high / low.max(1e-30)).log10();
+        eprintln!("{name:<38} {rate} Hz x{n} (core {core_rate} Hz x{core_n}): power above {} Hz {share_db:+.1} dB of the power below", rate / 4);
+        assert!(share_db > -45.0, "{name}: {share_db:.1} dB");
+    }
+}

@@ -4,7 +4,9 @@ Short AAC streams (two seconds each) that the decoder is checked against,
 made by encoders other than this crate's so the decoder meets syntax this
 crate never writes. `tests/ffmpeg_oracle.rs` decodes each with the decoder
 and with ffmpeg's, as a black box, and compares the PCM (or, for HE-AAC,
-checks that the output is the AAC-LC core at half the rate).
+checks that the decoder's core-only mode gives the AAC-LC core at half the
+rate). The HE-AAC decoding itself is checked against ISO's conformance
+streams instead (`tests/conformance.rs`).
 
 Every stream was made with the `ffmpeg` in the `linuxserver/ffmpeg` image
 (ffmpeg 9.0, built with `libfdk_aac`), run only as a command-line tool, from

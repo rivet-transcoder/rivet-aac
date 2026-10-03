@@ -3,7 +3,9 @@
 Where every part of this crate came from. The short version: the code is
 this repository's own, written from the ISO/IEC standards and published
 literature; the normative tables were transcribed from one copy of ISO/IEC
-13818-7:2004 whose use the owner approved; and other AAC implementations
+13818-7:2004 whose use the owner approved and, for SBR and parametric
+stereo, one copy of ISO/IEC 14496-3:2009 (owner's review pending); HE-AAC is
+validated against ISO's conformance streams; and other AAC implementations
 were used only as black boxes, never read.
 
 ## Clean-room rules
@@ -67,15 +69,16 @@ comparison exposed the question; the answer is the standard's own text.
 - Informative Annex C, for the encoder only: see "The encoder" below.
 
 **ISO/IEC 14496-3** (MPEG-4 Audio), from the published syntax of these
-clauses (no copy of the standard's text was used in writing the decoder; the
-encoder's writers of the same structures came from the same knowledge):
+clauses (no copy of the standard's text was used in writing the AAC-LC
+decoder; the encoder's writers of the same structures came from the same
+knowledge; the SBR and PS clauses, added later, were read from the copy
+described under "HE-AAC and HE-AAC v2" below):
 - The AudioSpecificConfig (1.6.2.1) and GASpecificConfig (4.4.1): object
   type with its escape, explicit sampling frequency, channel configuration,
   frameLengthFlag, dependsOnCoreCoder, extensionFlag.
 - SBR and PS signalling (1.6.5): explicit hierarchical signalling (object
   types 5 and 29), the backward-compatible sync extensions `0x2b7` and
-  `0x548`, and implicit signalling (SBR data in fill elements). Only the
-  signalling is read: the SBR and PS payloads are skipped, never parsed.
+  `0x548`, and implicit signalling (SBR data in fill elements).
 - The sampling_frequency_index 12 (7350 Hz), which uses the 8 kHz tables.
 - Perceptual noise substitution (4.6.13): the noise codebook 13, the first
   noise energy as a 9-bit PCM value offset by `global_gain - 90` and 256, the
@@ -96,8 +99,9 @@ positions, from a copy of ISO/IEC 13818-7:2004 retrieved on 2026-09-27 from
 Its footer identifies it as a licensee's copy ("Reproduced by IHS under
 license with ISO … IHS Licensee=etri") re-hosted without authorisation — not
 a purchased copy. **The owner reviewed this and explicitly approved using it
-for the normative tables on 2026-09-28.** No other copy of any AAC standard
-was fetched or used.
+for the normative tables on 2026-09-28.** The only other copy of an AAC
+standard fetched is the ISO/IEC 14496-3:2009 one described under "HE-AAC and
+HE-AAC v2" below.
 
 | table | what | where | transcribed |
 |---|---|---|---|
@@ -133,12 +137,106 @@ Research 1, 1979; Johnston & Ferreira, ICASSP 1992; Herre & Johnston, AES
 FAAC, FFmpeg's, Nero's, VisualOn's or Apple's. Its history (moved here from
 the rivet repository with `git filter-repo`) carries the original commits.
 
+## HE-AAC and HE-AAC v2: spectral band replication and parametric stereo
+
+Added on 2026-10-02 at the owner's request (see "What is not implemented"
+below for the earlier decision this reverses).
+
+**Sources.** ISO/IEC 14496-3:2009 (fourth edition), read for: the SBR
+payload syntax and semantics (4.4.2.8, 4.5.2.8, Tables 4.62 to 4.74 and
+4.104 to 4.122), the SBR tool's decoding process (4.6.18: frequency band
+tables, time / frequency grid, envelope and noise floor decoding and
+dequantisation, the QMF banks, HF generation, HF adjustment), the
+informative SBR encoder description (4.B.18), the parametric stereo syntax
+and semantics (8.4, 8.5.2), its decoding process (8.6.4) and its combination
+with SBR (Annex 8.A), and the signalling of SBR and PS (1.6.5, 1.6.6). The
+copy used was fetched on 2026-10-02 from
+`https://csclub.uwaterloo.ca/~ehashman/ISO14496-3-2009.pdf`; its footer
+identifies it as a licensee's copy ("LICENSED TO MECON Limited ... FOR
+INTERNAL USE AT THIS LOCATION ONLY") re-hosted without ISO's authorisation,
+like the 13818-7 copy below. **It has not yet been reviewed by the owner;
+that review is pending**, as it was for the first copy before 2026-09-28.
+No implementation's source was opened: not FFmpeg's aacsbr / aacps, faad2,
+fdk-aac, Helix, the 3GPP or MPEG reference software or any other.
+
+**Tables transcribed** (by a script reading the text of the PDF, as for
+13818-7; checks below):
+
+| table | what | where |
+|---|---|---|
+| 4.A.79–4.A.88 | the SBR envelope and noise floor Huffman tables | `tables/sbr.rs` |
+| 4.A.89 | the 640 coefficients of the QMF bank window | `tables/sbr.rs` |
+| 4.A.91 | the 512-entry noise table | `tables/sbr.rs` |
+| 8.B.17–8.B.21 | the PS Huffman tables (IID, ICC, IPD, OPD) | `tables/ps.rs` |
+| 8.24–8.29, 8.31 | PS mode configurations, quantisation grids, envelope counts | `tables/ps.rs`, by hand |
+| 8.37–8.43 | hybrid filter prototypes, all-pass and fractional delay constants | `tables/ps.rs`, by hand |
+| 8.45, 8.46, 8.48, 8.49 | stereo band maps | `tables/ps.rs`, by hand |
+
+The window's `c[639]` is printed with nine decimals (`-0.000552528`), the
+other 639 with ten; it is kept as printed. Checks: every Huffman table is a
+complete prefix code (Kraft sum exactly 1) of the size its largest absolute
+value implies, and every value round-trips through its codeword; the window
+satisfies `c[i] = c[640 - i]` but at the four block boundaries, where the
+table's sign pattern flips it; the hybrid prototypes' centre taps are 1/Q and
+the taps a multiple of Q away are zero (the sub-bands add back to a delay);
+the stereo band maps cover every band; and above all the decoder meets the
+conformance references (next paragraph), which a slip in any of these tables
+would break.
+
+**Validation data.** The conformance bitstreams and reference waveforms of
+ISO/IEC 14496-26 (second edition), ISO's publicly downloadable electronic
+inserts at `https://standards.iso.org/iso-iec/14496/-26/ed-2/en/`, used as
+data only: streams decoded, PCM compared. They are not in this repository;
+`tools/fetch_conformance.py` fetches them. The conformance criterion (RMS of
+the difference below 2^-15/sqrt(12), largest at most 2^-14) is the one 14496-4
+and 14496-26 state for a 16-bit decoder, written from memory of those parts:
+the text of 14496-26 was not available.
+
+**Where the conformance references decided a reading.** Two places where the
+text admits (or states) one thing and the references of 14496-26 show
+another; the decoder follows the references, and says so in the code:
+
+- *PS interpolation, first region* (8.6.4.6.4, special case a): the text
+  writes `H(n) = H(n_-1) + n (H(n_0) - H(n_-1)) / n_0` for `n = 0 ... n_0 - 1`,
+  which keeps slot 0 at the previous frame's value. With it, the PS streams
+  that change their IID between frames (`al_sbr_ps_01`, `_03` to `_06`)
+  were off by up to 670 LSB at those changes; the general formula with
+  `n_-1 = -1`, i.e. `(n + 1) / (n_0 + 1)`, matches every reference to 0.05
+  LSB.
+- *Sinusoids deferred past a frame's end* (4.6.18.7.2): `delta_step` looks
+  at `S'_IndexMapped` of the previous frame's last envelope. A sinusoid that
+  starts in a frame whose `lA` equals its envelope count is silent there,
+  and read literally stays silent in the next frame until its `lA`; in
+  `al_sbr_cm_48_5` the reference continues it from the next frame's start.
+  The decoder keeps the previous frame's transmitted `bs_add_harmonic` flags
+  for `delta_step`, which matches the reference (and every other stream).
+
+Two further choices the text leaves open: `bs_amp_res` as cleared by a
+one-envelope FIXFIX grid applies to that channel's envelopes only (read as
+one variable for a channel pair, the conformance streams do not parse); and
+for implicit PS signalling the output turns stereo at the first PS data of a
+mono stream, rather than for every mono SBR stream as 1.6.6.3 would have an
+HE-AAC v2 decoder assume (the conformance references are mono for mono
+HE-AAC streams and stereo for PS ones, which only this reading meets).
+
+**The encoder** follows the informative 4.B.18 (analysis bank, envelope
+estimation and quantisation, delta coding) and 8.C.6's outline for PS
+parameters; its noise floor and inverse filtering estimate (a second-order
+prediction gain of the original high band against its patch source), its
+transient detector and its rate choices are this crate's own. Its timing
+constant (`ALIGN`, 47 QMF slots) was derived from the banks' delays and
+checked by measurement; `HE_AAC_DELAY` (3586 samples) was measured from the
+round trip.
+
 ## What is not implemented, on purpose
 
-Spectral band replication, parametric stereo and USAC — HE-AAC, HE-AAC v2 and
-xHE-AAC. An HE-AAC stream decodes as its AAC-LC core; see the README. This
-is the owner's decision (2026-09-28): implementing those tools would put the
-code in the scope of patents on them that are still in force, and the owner
-is avoiding that exposure. AAC Main (prediction), SSR (gain control), LTP and
-the coupling channel element are refused by name: AAC-LC encoders do not
-produce them.
+USAC (xHE-AAC). AAC Main (prediction), SSR (gain control), LTP and the
+coupling channel element are refused by name: AAC-LC encoders do not
+produce them. The low power SBR tool and SBR in scalable or BSAC streams are
+not implemented (a decoder may use the high quality tool everywhere).
+
+Spectral band replication and parametric stereo were left out by the owner's
+decision of 2026-09-28 (implementing them would put the code in the scope of
+patents on them that may still be in force). On 2026-10-02 the owner asked
+for them to be implemented; whether a use needs a patent licence is the
+user's to determine.
