@@ -118,7 +118,7 @@ HE-AAC v2" below.
 | 35 | sampling_frequency_index | `tables/swb.rs` | 2026-09-27, for the encoder |
 | 45, 46, 47, 52, 53 | scalefactor bands, 22.05–48 kHz | `tables/swb.rs` | 2026-09-27, for the encoder |
 | 59 | codebook dimension, signedness, largest value | `tables/codebooks.rs` | 2026-09-27, for the encoder |
-| 48–51, 54–57 | scalefactor bands, 8–16 kHz and 64–96 kHz | `tables/swb.rs` | 2026-09-28, for the decoder |
+| 48–51, 54–57 | scalefactor bands, 8–16 kHz and 64–96 kHz | `tables/swb.rs` | 2026-09-28, for the decoder; 48–51 the encoder's too from 2026-10-03 |
 | 33 | TNS_MAX_BANDS (AAC-LC, long and short windows) | `tables/swb.rs` | 2026-09-28, for the decoder |
 | 38 | the rate ranges an explicit frequency maps by | `tables/swb.rs` | 2026-09-28, for the decoder |
 

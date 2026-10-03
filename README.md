@@ -91,15 +91,20 @@ sentence to show a user then.
 
 ## What it encodes
 
-**AAC-LC** at 22.05, 24, 32, 44.1 and 48 kHz (`encode::coding_rate` names
-the rate to resample other input to), mono to 7.1 (channel configurations
+**AAC-LC** at 8, 11.025, 12, 16, 22.05, 24, 32, 44.1 and 48 kHz
+(`encode::SUPPORTED_RATES`; `encode::coding_rate` names the rate to resample
+other input to, and `encode::bitrate_range` the bit rates a rate and channel
+count allow: 8 kb/s a main channel up to the decoder buffer's 6144 bits a
+channel a frame, 48 kb/s a channel at 8 kHz, 96 kb/s at 16 kHz), mono to 7.1 (channel configurations
 1–7), raw access units plus the AudioSpecificConfig, and `adts_frame` for
 ADTS. A sine-window MDCT with long / short block switching from an
 energy-ratio transient detector; a psychoacoustic model on the MDCT spectrum
 (band energy, spectral-flatness tonality, the Annex C spreading function,
 pre-echo control, threshold in quiet); per-band M/S; one noise-to-mask
 offset per frame found by bisection against a bit-reservoir budget (constant
-rate at the decoder-buffer level); optimal sectioning by dynamic
+rate at the decoder-buffer level; the reservoir starts half full, where the
+loop holds it, so a ten-second stream lands within about 1.5% of its nominal
+rate even at 8 kHz and 12 kb/s); optimal sectioning by dynamic
 programming. Left out, all optional for an encoder: TNS (measured, and
 worse on these metrics), intensity stereo, PNS, the pulse tool, KBD windows.
 The encoder was written in the rivet repository first and moved here with
@@ -209,7 +214,7 @@ against faad's, the worst channel of each stream:
 | streams | made by | rates | layouts and tools | worst SNR | largest \|difference\| |
 |---|---|---|---|---|---|
 | 12, committed | fdk-aac | 8, 11.025, 12, 16, 22.05, 32, 44.1, 48, 64, 88.2, 96 kHz | mono to 7.1 (a PCE 7.1, in band), CBR and VBR, ADTS and MP4; TNS, M/S, intensity, KBD | 131.2 dB (7.1; the others 132.3 dB or better) | 1.2e-6 |
-| 41, at test time | this crate's encoder | 22.05–48 kHz | mono, stereo, 3.0, 4.0, 5.0, 5.1, 7.1; 32–320 kb/s | 132.0 dB | 2.4e-7 |
+| 75, at test time | this crate's encoder | 8–48 kHz | mono, stereo, 3.0, 4.0, 5.0, 5.1, 7.1; 12–320 kb/s | 132.0 dB | 2.4e-7 |
 | 9, at test time | this crate's encoder, exercising KBD and pulses | 32–48 kHz | mono, stereo, 5.1 | 133.7 dB | 2.2e-7 |
 | 4, committed | fdk-aac, HE-AAC | 44.1, 48 kHz | stereo, 5.1; implicit, backward-compatible and hierarchical signalling | 53.0 dB | 2.1e-2 |
 | 9, at test time | this crate's encoder, HE-AAC | 32, 44.1, 48 kHz | mono, stereo, 5.1 | 96.5 dB | 5.5e-5 |

@@ -10,8 +10,10 @@
 //!   long/short block switching, M/S stereo per scalefactor band, and a
 //!   constant-NMR rate loop with a bit reservoir (constant bit rate at the
 //!   decoder-buffer level; the per-frame size varies).
-//! - Coded at 22.05, 24, 32, 44.1 or 48 kHz ([`SUPPORTED_RATES`]); input at
-//!   any other rate is the caller's to resample, to [`coding_rate`] of it.
+//! - Coded at 8, 11.025, 12, 16, 22.05, 24, 32, 44.1 or 48 kHz
+//!   ([`SUPPORTED_RATES`]); input at any other rate is the caller's to
+//!   resample, to [`coding_rate`] of it. [`bitrate_range`] gives the bit
+//!   rates a rate and channel count allow.
 //! - Channel configurations 1–7 (ISO/IEC 13818-7 Table 42), from the native
 //!   channel order (FL FR FC LFE BL BR SL SR, the decoder's `Speaker`
 //!   order): mono, stereo, 3.0, 4.0, 5.0, 5.1, 7.1.
@@ -68,10 +70,12 @@ pub const ENCODER_DELAY: u32 = 1024;
 pub const HE_AAC_DELAY: u32 = 3586;
 
 /// The sampling rates this encoder codes. Other rates are the caller's to
-/// resample ([`coding_rate`] picks the target); the standard's rates below
-/// 22.05 kHz and above 48 kHz are left out on purpose (speech-band and
-/// high-resolution rates are not what AAC-LC delivery to the web needs).
-pub const SUPPORTED_RATES: [u32; 5] = [48_000, 44_100, 32_000, 24_000, 22_050];
+/// resample ([`coding_rate`] picks the target); the standard's rates above
+/// 48 kHz, and 7.35 kHz, are left out on purpose (high-resolution rates are
+/// not what AAC-LC delivery needs, and 7.35 kHz has no use 8 kHz lacks).
+pub const SUPPORTED_RATES: [u32; 9] = [
+    48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000,
+];
 
 /// Encoder settings.
 #[derive(Clone, Debug)]
@@ -80,28 +84,31 @@ pub struct EncoderConfig {
     pub sample_rate: u32,
     /// 1, 2, 3, 4, 5, 6 or 8, in the native channel order.
     pub channels: u8,
-    /// Target bit rate in bits per second for all channels together; 0
-    /// picks [`default_bitrate`].
+    /// Target bit rate in bits per second for all channels together, within
+    /// [`bitrate_range`]; 0 picks [`default_bitrate`], held to that range's
+    /// top at the low rates.
     pub bitrate: u32,
 }
 
 /// The rate a stream from `input_rate` is coded at: the input's own when
 /// the encoder codes it natively ([`SUPPORTED_RATES`]), otherwise the
-/// nearest of them in the input's family (multiples of 11.025 kHz stay in
-/// the 44.1 kHz family, the rest go to the 48 kHz one), never below 22.05
-/// kHz and never above 48 kHz.
+/// lowest of them at or above it (so no bandwidth is lost), multiples of
+/// 11.025 kHz staying in the 44.1 kHz family; never below 8 kHz and never
+/// above 48 kHz.
 pub fn coding_rate(input_rate: u32) -> u32 {
     if SUPPORTED_RATES.contains(&input_rate) {
         return input_rate;
     }
-    let cd_family = input_rate.is_multiple_of(11_025);
-    match (input_rate, cd_family) {
-        (r, true) if r < 22_050 => 22_050,
-        (_, true) => 44_100,
-        (r, false) if r < 24_000 => 24_000,
-        (r, false) if r <= 32_000 => 32_000,
-        _ => 48_000,
+    if input_rate.is_multiple_of(11_025) && input_rate > 0 {
+        // 33.075 kHz and up: 11.025 and 22.05 kHz are native.
+        return 44_100;
     }
+    SUPPORTED_RATES
+        .iter()
+        .rev()
+        .copied()
+        .find(|&r| r >= input_rate)
+        .unwrap_or(48_000)
 }
 
 /// Default bit rate for a channel count: 64 kb/s mono, 128 kb/s stereo,
@@ -167,7 +174,8 @@ pub fn default_he_aac_bitrate(profile: Profile, channels: u8) -> u32 {
 /// The bit rates a stream of `channels` at `rate` Hz can have: at least
 /// 8 kb/s per main channel, and at most what the decoder input buffer of
 /// ISO/IEC 13818-7 8.2.2 allows a constant-rate stream (6144 bits per main
-/// channel per frame: 288 kb/s a channel at 48 kHz, 144 kb/s at 24 kHz).
+/// channel per frame: 288 kb/s a channel at 48 kHz, 144 kb/s at 24 kHz,
+/// 48 kb/s at 8 kHz).
 /// The LFE channel is not a main channel.
 pub fn bitrate_range(rate: u32, channels: u8) -> (u32, u32) {
     let main = u64::from(channels) - u64::from(channels >= 6);
@@ -234,7 +242,9 @@ fn channel_elements(channels: u8) -> Option<(u8, Vec<ElementSlots>)> {
 /// Audio bandwidth for a bit rate per main channel: the classic trade of
 /// bandwidth against coding noise at low rates.
 fn bandwidth_hz(bits_per_channel: u32, rate: u32) -> f64 {
-    const POINTS: [(f64, f64); 8] = [
+    const POINTS: [(f64, f64); 10] = [
+        (8_000.0, 4_000.0),
+        (12_000.0, 5_000.0),
         (16_000.0, 6_000.0),
         (24_000.0, 9_000.0),
         (32_000.0, 11_500.0),
@@ -400,12 +410,12 @@ impl Encoder {
                 ))
             })?;
         let main_channels = u32::from(config.channels) - u32::from(config.channels >= 6);
+        let (min_bitrate, max_bitrate) = bitrate_range(rate, config.channels);
         let bitrate = if config.bitrate == 0 {
-            default_bitrate(config.channels)
+            default_bitrate(config.channels).min(max_bitrate)
         } else {
             config.bitrate
         };
-        let (min_bitrate, max_bitrate) = bitrate_range(rate, config.channels);
         if bitrate < min_bitrate || bitrate > max_bitrate {
             return Err(Error::Config(format!(
                 "AAC bit rate {bitrate} b/s for {} channels at {rate} Hz (allowed {min_bitrate}..={max_bitrate})",
@@ -475,8 +485,13 @@ impl Encoder {
                 den: u64::from(rate),
                 frame: 0,
                 // A constant-rate decoder fills its input buffer before it
-                // starts (13818-7 8.2.3), so the reservoir starts full.
-                reservoir: buffer - mean as i64,
+                // starts (13818-7 8.2.3), so the reservoir could start full;
+                // it starts at the half the rate loop steers it to instead.
+                // A full start is credit the loop spends in the first second
+                // or so, half the buffer over the stream's rate: ~0.1 s at
+                // 64 kb/s a channel, ~0.4 s at 8 kb/s, which on a short
+                // low-rate stream is several percent over the nominal.
+                reservoir: (buffer - mean as i64) / 2,
                 max_reservoir: buffer - mean as i64,
                 log_pe_avg: 0.0,
                 lambda: 0.0,

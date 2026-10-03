@@ -91,6 +91,33 @@ fn round_trips_every_layout_through_the_encoder() {
     }
 }
 
+/// The speech-band rates through the encoder and this decoder, raw and as
+/// ADTS: the rate each stream states, and the tone back in its channel.
+#[test]
+fn round_trips_the_low_rates_through_the_encoder() {
+    for rate in [8_000u32, 11_025, 12_000, 16_000] {
+        let len = rate as usize * 2;
+        let chans = vec![sine(440.0, 0.4, rate, len), sine(660.0, 0.3, rate, len)];
+        let (enc, aus) = encode(&chans, rate);
+        let mut raw = Decoder::new_raw(&enc.audio_specific_config()).unwrap();
+        let (out_rate, n, out) = decode_all(&mut raw, &aus);
+        assert_eq!((out_rate, n), (rate, 2));
+        let mut adts = Decoder::new_adts();
+        let stream: Vec<u8> = aus
+            .iter()
+            .flat_map(|au| encode::adts_frame(enc.sampling_index(), enc.channel_configuration(), au))
+            .collect();
+        let (adts_rate, _, adts_out) = decode_all(&mut adts, &[stream]);
+        assert_eq!(adts_rate, rate);
+        for c in 0..2 {
+            assert_eq!(adts_out[c], out[c], "{rate} Hz channel {c}: ADTS and raw differ");
+            let d = encode::ENCODER_DELAY as usize;
+            let snr = snr_db(&chans[c][2048..len - 1024], &out[c][2048 + d..len - 1024 + d]);
+            assert!(snr > 40.0, "{rate} Hz channel {c}: {snr:.1} dB");
+        }
+    }
+}
+
 #[test]
 fn adts_in_any_chunking_decodes_the_same_as_raw() {
     let rate = 44_100;

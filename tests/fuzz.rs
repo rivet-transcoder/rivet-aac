@@ -17,6 +17,7 @@ fn corpus() -> &'static [Stream] {
         [
             (48_000u32, 2u8, Profile::Lc),
             (22_050, 1, Profile::Lc),
+            (8_000, 2, Profile::Lc),
             (44_100, 6, Profile::Lc),
             (44_100, 2, Profile::HeAac),
             (48_000, 2, Profile::HeAacV2),

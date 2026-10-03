@@ -713,6 +713,14 @@ fn agrees_with_faad_on_this_crates_encoder() {
             Profile::Lc,
         ));
     }
+    // The speech-band rates at lean bit rates.
+    for (rate, channels, bitrate) in [(8_000u32, 1u8, 12_000u32), (8_000, 2, 24_000), (11_025, 1, 16_000), (12_000, 2, 32_000), (16_000, 1, 16_000), (16_000, 2, 48_000)] {
+        cases.push((
+            format!("lc-{rate}-{channels}ch-{bitrate}"),
+            EncoderConfig { sample_rate: rate, channels, bitrate },
+            Profile::Lc,
+        ));
+    }
     for rate in aac::encode::HE_AAC_RATES {
         for channels in [1u8, 2, 6] {
             cases.push((

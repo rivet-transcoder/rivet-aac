@@ -613,12 +613,13 @@ fn stereo_sine_decodes_cleanly_at_every_rate() {
         let len = rate as usize;
         let l = sine(997.0, 0.5, rate, len);
         let r = sine(1499.0, 0.3, rate, len);
-        let out = encode_and_decode(&[l.clone(), r.clone()], rate, 128_000, true);
+        let bitrate = bitrate_range(rate, 2).1.min(128_000);
+        let out = encode_and_decode(&[l.clone(), r.clone()], rate, bitrate, true);
         let (sl, sr) = (
             steady_snr_db(&l, &out.decoded[0]),
             steady_snr_db(&r, &out.decoded[1]),
         );
-        eprintln!("{rate} Hz stereo sines @128k: SNR L {sl:.1} dB, R {sr:.1} dB");
+        eprintln!("{rate} Hz stereo sines @{bitrate}: SNR L {sl:.1} dB, R {sr:.1} dB");
         assert!(sl > 50.0 && sr > 50.0, "{rate}: {sl} / {sr}");
     }
 }
@@ -1007,6 +1008,77 @@ fn reference_decoder_agrees_with_faad() {
                 "{rate} Hz {channels} ch, channel {c}: reference vs faad decode agree to {agree:.1} dB"
             );
             assert!(agree > 70.0, "{rate}/{channels}, channel {c}: {agree}");
+        }
+    }
+}
+
+#[test]
+fn coding_rate_keeps_native_rates_and_rounds_others_up() {
+    for rate in SUPPORTED_RATES {
+        assert_eq!(coding_rate(rate), rate);
+    }
+    assert_eq!(coding_rate(7_350), 8_000);
+    assert_eq!(coding_rate(4_000), 8_000);
+    assert_eq!(coding_rate(10_000), 11_025);
+    assert_eq!(coding_rate(14_000), 16_000);
+    assert_eq!(coding_rate(20_000), 22_050);
+    assert_eq!(coding_rate(96_000), 48_000);
+    assert_eq!(coding_rate(88_200), 44_100);
+    assert_eq!(coding_rate(64_000), 48_000);
+    // The highest bit rate a constant-rate stream may have: 6144 bits a
+    // main channel a frame (13818-7 8.2.2), 48 kb/s a channel at 8 kHz.
+    assert_eq!(bitrate_range(8_000, 1), (8_000, 48_000));
+    assert_eq!(bitrate_range(16_000, 2), (16_000, 192_000));
+    // The default bit rate is held to that at the low rates.
+    let enc = Encoder::new(EncoderConfig { sample_rate: 8_000, channels: 2, bitrate: 0 }).unwrap();
+    assert_eq!(enc.sampling_index(), 11);
+}
+
+/// The speech-band rates, 8 to 16 kHz, mono and stereo at bit rates from
+/// lean to generous: over ten seconds the stream holds its nominal rate to
+/// within 5% (the reservoir is several tenths of a second of a stream this
+/// lean, so where it starts and ends shows), and two tones come back clean.
+#[test]
+fn low_rates_hold_their_bit_rate_and_quality() {
+    for (rate, per_channel, min_snr) in [
+        (8_000u32, [12_000u32, 16_000, 24_000], 40.0),
+        (11_025, [12_000, 20_000, 32_000], 25.0),
+        (12_000, [12_000, 20_000, 32_000], 35.0),
+        (16_000, [16_000, 32_000, 48_000], 35.0),
+    ] {
+        let len = rate as usize * 10;
+        for channels in [1usize, 2] {
+            for b in per_channel {
+                let bitrate = b * channels as u32;
+                let tones: Vec<Vec<f32>> = (0..channels)
+                    .map(|c| {
+                        let (f0, f1) = (440.0 + 110.0 * c as f64, 1250.0);
+                        sine(f0, 0.4, rate, len)
+                            .iter()
+                            .zip(sine(f1, 0.1, rate, len))
+                            .map(|(a, b)| a + b)
+                            .collect()
+                    })
+                    .collect();
+                let notes: Vec<Vec<f32>> =
+                    (0..channels).map(|c| music(rate, len, c as u32 + 1)).collect();
+                for (name, input) in [("tones", &tones), ("music", &notes)] {
+                    let out = encode_and_decode(input, rate, bitrate, true);
+                    let actual = bitrate_of(&out.aus, rate);
+                    let off = actual / f64::from(bitrate) - 1.0;
+                    let snr = (0..channels)
+                        .map(|c| steady_snr_db(&input[c], &out.decoded[c]))
+                        .fold(f64::INFINITY, f64::min);
+                    eprintln!(
+                        "{rate} Hz {channels} ch {name} @{bitrate}: {actual:.0} b/s ({:+.2}%), SNR {snr:.1} dB",
+                        100.0 * off
+                    );
+                    assert!(off.abs() < 0.05, "{rate}/{channels}/{bitrate} {name}: {actual}");
+                    if name == "tones" {
+                        assert!(snr > min_snr, "{rate}/{channels}/{bitrate}: {snr:.1} dB");
+                    }
+                }
+            }
         }
     }
 }
