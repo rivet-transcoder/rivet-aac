@@ -4,7 +4,7 @@
 //! cargo-fuzz targets for longer, coverage-guided runs.)
 
 use aac::decode::{AudioSpecificConfig, Decoder, probe};
-use aac::encode::{Encoder, EncoderConfig, adts_frame};
+use aac::encode::{Encoder, EncoderConfig, Profile, Signalling, adts_frame};
 use proptest::prelude::*;
 
 /// An AudioSpecificConfig and its access units.
@@ -14,28 +14,38 @@ type Stream = (Vec<u8>, Vec<Vec<u8>>);
 fn corpus() -> &'static [Stream] {
     static CORPUS: std::sync::OnceLock<Vec<Stream>> = std::sync::OnceLock::new();
     CORPUS.get_or_init(|| {
-        [(48_000u32, 2u8), (22_050, 1), (44_100, 6)]
-            .into_iter()
-            .map(|(rate, channels)| {
-                let mut enc = Encoder::new(EncoderConfig {
+        [
+            (48_000u32, 2u8, Profile::Lc),
+            (22_050, 1, Profile::Lc),
+            (44_100, 6, Profile::Lc),
+            (44_100, 2, Profile::HeAac),
+            (48_000, 2, Profile::HeAacV2),
+        ]
+        .into_iter()
+        .map(|(rate, channels, profile)| {
+            let mut enc = Encoder::with_profile(
+                EncoderConfig {
                     sample_rate: rate,
                     channels,
                     bitrate: 0,
+                },
+                profile,
+            )
+            .unwrap();
+            let n = usize::from(channels);
+            let mut seed = 7u32;
+            let samples: Vec<f32> = (0..8192 * n)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let click = if (i / n) % 3000 < 20 { 0.8 } else { 0.0 };
+                    0.3 * ((i / n) as f32 * 0.05).sin() + click + (seed >> 9) as f32 / 8e6 - 0.5 * 0.01
                 })
-                .unwrap();
-                let n = usize::from(channels);
-                let mut seed = 7u32;
-                let samples: Vec<f32> = (0..8192 * n)
-                    .map(|i| {
-                        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                        let click = if (i / n) % 3000 < 20 { 0.8 } else { 0.0 };
-                        0.3 * ((i / n) as f32 * 0.05).sin() + click + (seed >> 9) as f32 / 8e6 - 0.5 * 0.01
-                    })
-                    .collect();
-                let mut aus = enc.encode(&samples);
-                aus.extend(enc.flush());
-                (enc.audio_specific_config().to_vec(), aus)
-            })
+                .collect();
+            let mut aus = enc.encode(&samples);
+            aus.extend(enc.flush());
+            let signalling = if profile == Profile::HeAacV2 { Signalling::Hierarchical } else { Signalling::BackwardCompatible };
+            (enc.audio_specific_config_with(signalling), aus)
+        })
             .collect()
     })
 }
@@ -99,7 +109,7 @@ proptest! {
 
     #[test]
     fn mutated_access_units_never_panic(
-        stream in 0usize..3,
+        stream in 0usize..5,
         frame in any::<usize>(),
         muts in proptest::collection::vec(mutation(), 1..6),
     ) {
@@ -120,7 +130,7 @@ proptest! {
 
     #[test]
     fn mutated_adts_never_panics(
-        stream in 0usize..3,
+        stream in 0usize..5,
         muts in proptest::collection::vec(mutation(), 1..8),
         chunk in 1usize..4096,
     ) {
@@ -141,7 +151,7 @@ proptest! {
 
     #[test]
     fn mutated_configs_never_panic(
-        stream in 0usize..3,
+        stream in 0usize..5,
         muts in proptest::collection::vec(mutation(), 1..4),
     ) {
         let (asc, aus) = &corpus()[stream];
