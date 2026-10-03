@@ -4,7 +4,7 @@ Where every part of this crate came from. The short version: the code is
 this repository's own, written from the ISO/IEC standards and published
 literature; the normative tables were transcribed from one copy of ISO/IEC
 13818-7:2004 whose use the owner approved and, for SBR and parametric
-stereo, one copy of ISO/IEC 14496-3:2009 (owner's review pending); HE-AAC is
+stereo, one copy of ISO/IEC 14496-3:2009 (accepted 2026-10-02); HE-AAC is
 validated against ISO's conformance streams; and other AAC implementations
 were used only as black boxes, never read.
 
@@ -154,8 +154,9 @@ copy used was fetched on 2026-10-02 from
 `https://csclub.uwaterloo.ca/~ehashman/ISO14496-3-2009.pdf`; its footer
 identifies it as a licensee's copy ("LICENSED TO MECON Limited ... FOR
 INTERNAL USE AT THIS LOCATION ONLY") re-hosted without ISO's authorisation,
-like the 13818-7 copy below. **It has not yet been reviewed by the owner;
-that review is pending**, as it was for the first copy before 2026-09-28.
+like the 13818-7 copy below. It was accepted on 2026-10-02 on the same
+basis as that copy, the owner having asked for such decisions to be settled
+on their behalf.
 No implementation's source was opened: not FFmpeg's aacsbr / aacps, faad2,
 fdk-aac, Helix, the 3GPP or MPEG reference software or any other.
 
