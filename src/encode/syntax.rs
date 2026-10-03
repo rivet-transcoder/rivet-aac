@@ -236,6 +236,49 @@ pub fn audio_specific_config(sampling_index: u8, channel_configuration: u8) -> [
     v.to_be_bytes()
 }
 
+/// The AudioSpecificConfig of an HE-AAC (or, with `ps`, HE-AAC v2) stream
+/// whose AAC-LC core has `sampling_index` and `channel_configuration` and
+/// whose output runs at `rate` (ISO/IEC 14496-3 1.6.2.1, 1.6.5, 1.6.6).
+pub(super) fn he_aac_audio_specific_config(
+    sampling_index: u8,
+    channel_configuration: u8,
+    rate: u32,
+    ps: bool,
+    signalling: super::Signalling,
+) -> Vec<u8> {
+    use super::Signalling::*;
+    let core = audio_specific_config(sampling_index, channel_configuration);
+    if signalling == Implicit {
+        return core.to_vec();
+    }
+    let ext_index = crate::tables::SAMPLING_FREQUENCIES.iter().position(|&r| r == rate).expect("an HE-AAC rate has an index") as u32;
+    let mut w = BitWriter::with_capacity(8);
+    match signalling {
+        Hierarchical => {
+            w.put(if ps { 29 } else { 5 }, 5); // audioObjectType: PS or SBR
+            w.put(u32::from(sampling_index), 4);
+            w.put(u32::from(channel_configuration), 4);
+            w.put(ext_index, 4); // extensionSamplingFrequencyIndex
+            w.put(2, 5); // the core's audioObjectType: AAC-LC
+            w.put(0, 3); // GASpecificConfig: frameLengthFlag, dependsOnCoreCoder, extensionFlag
+        }
+        _ => {
+            w.put(u32::from(u16::from_be_bytes(core)) >> 3, 13);
+            w.put(0, 3);
+            w.put(0x2b7, 11); // syncExtensionType
+            w.put(5, 5); // extensionAudioObjectType: SBR
+            w.put(1, 1); // sbrPresentFlag
+            w.put(ext_index, 4);
+            if ps {
+                w.put(0x548, 11); // syncExtensionType
+                w.put(1, 1); // psPresentFlag
+            }
+        }
+    }
+    w.align();
+    w.into_bytes()
+}
+
 /// The 7-byte ADTS header (ISO/IEC 13818-7 6.2, no CRC) for one raw data
 /// block of `payload_len` bytes. `buffer_fullness` is the 11-bit
 /// adts_buffer_fullness (0x7FF for a variable-rate stream).

@@ -99,7 +99,6 @@ impl SbrTable {
     }
 
     /// `(length, codeword)` of value `v`, or `None` outside the table.
-    #[allow(dead_code)] // the encoder's
     pub fn code(self, v: i32) -> Option<(u8, u32)> {
         let (e, lav) = self.entries();
         e.get(usize::try_from(v + lav).ok()?).copied()
@@ -171,7 +170,6 @@ impl PsTable {
         &trees[self as usize]
     }
 
-    #[allow(dead_code)] // the encoder's
     pub fn code(self, v: i32) -> Option<(u8, u32)> {
         let (e, off) = self.entries();
         e.get(usize::try_from(v + off).ok()?).copied()

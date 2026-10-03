@@ -36,6 +36,7 @@ pub(crate) mod bits;
 mod huffman;
 mod psy;
 mod quant;
+mod sbr;
 mod syntax;
 
 #[cfg(test)]
@@ -49,11 +50,17 @@ use crate::tables::{self, RateTables, windows};
 
 use bits::BitWriter;
 use psy::{AttackDetector, BandPsy, Zone};
+use sbr::HeFrontEnd;
 use quant::{ChannelFrame, Layout, Quantized};
 
 pub use crate::FRAME_SAMPLES;
 /// Priming samples at the start of the stream (one frame of MDCT overlap).
 pub const ENCODER_DELAY: u32 = 1024;
+
+/// Priming samples at the start of an HE-AAC stream's decoded output, at
+/// the output rate: the core's frame of delay (twice over at this rate),
+/// the QMF banks of the encoder and decoder, and the SBR tool's offset.
+pub const HE_AAC_DELAY: u32 = 3586;
 
 /// The sampling rates this encoder codes. Other rates are the caller's to
 /// resample ([`coding_rate`] picks the target); the standard's rates below
@@ -101,6 +108,54 @@ pub fn default_bitrate(channels: u8) -> u32 {
         6 => 384_000,
         8 => 512_000,
         n => 64_000 * u32::from(n),
+    }
+}
+
+/// The profile an [`Encoder`] produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Profile {
+    /// AAC-LC (audio object type 2).
+    #[default]
+    Lc,
+    /// HE-AAC: an AAC-LC core at half the rate plus spectral band
+    /// replication (audio object type 5). Any channel count AAC-LC takes.
+    HeAac,
+    /// HE-AAC v2: HE-AAC with parametric stereo (audio object type 29): a
+    /// stereo input carried as a mono core plus stereo parameters.
+    HeAacV2,
+}
+
+/// The output rates HE-AAC and HE-AAC v2 encode at (their cores run at
+/// half): other input is the caller's to resample.
+pub const HE_AAC_RATES: [u32; 3] = [48_000, 44_100, 32_000];
+
+/// How an HE-AAC stream's AudioSpecificConfig signals SBR and PS
+/// (ISO/IEC 14496-3 1.6.5 and 1.6.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signalling {
+    /// The AAC-LC core's configuration alone: decoders find SBR and PS in
+    /// the access units. What ADTS carries.
+    Implicit,
+    /// The core's configuration followed by the sync extensions for SBR
+    /// (and PS): AAC-LC decoders ignore them. For MP4 and other containers
+    /// that store the configuration's length.
+    BackwardCompatible,
+    /// Audio object type 5 (or 29) first, then the core's: only HE-AAC
+    /// decoders accept it.
+    Hierarchical,
+}
+
+/// The default bit rate of an HE-AAC profile: 32 kb/s mono and 48 kb/s
+/// stereo for HE-AAC (16 kb/s more per further main channel), 32 kb/s for
+/// HE-AAC v2.
+pub fn default_he_aac_bitrate(profile: Profile, channels: u8) -> u32 {
+    match profile {
+        Profile::Lc => default_bitrate(channels),
+        Profile::HeAacV2 => 32_000,
+        Profile::HeAac => {
+            let main = u32::from(channels) - u32::from(channels >= 6);
+            16_000 + 16_000 * main
+        }
     }
 }
 
@@ -255,9 +310,23 @@ pub struct Encoder {
     /// Test knob: never switch to short blocks.
     block_switching: bool,
     exercise: Exercise,
+    /// The HE-AAC front end: SBR (and PS) ahead of this AAC-LC core.
+    he: Option<Box<HeAac>>,
+}
+
+/// What an HE-AAC encoder adds to its AAC-LC core.
+struct HeAac {
+    profile: Profile,
+    /// The input (and output) rate and channels.
+    rate: u32,
+    channels: u8,
+    front: HeFrontEnd,
+    /// Sample frames received, per channel, at the input rate.
+    samples_in: u64,
 }
 
 impl Encoder {
+    /// An AAC-LC encoder.
     pub fn new(config: EncoderConfig) -> Result<Self> {
         let rate = config.sample_rate;
         if !SUPPORTED_RATES.contains(&rate) {
@@ -265,7 +334,58 @@ impl Encoder {
                 "the AAC encoder codes at {SUPPORTED_RATES:?} Hz, not {rate} Hz: resample to coding_rate({rate})"
             )));
         }
-        let tables = tables::for_rate(rate).expect("every supported rate has tables");
+        Self::core(config, None)
+    }
+
+    /// An encoder of `profile`. For HE-AAC and HE-AAC v2 `config` is the
+    /// input: its rate one of [`HE_AAC_RATES`] (the core runs at half),
+    /// its bit rate the whole stream's (0 picks [`default_he_aac_bitrate`]);
+    /// HE-AAC v2 takes stereo input only.
+    pub fn with_profile(config: EncoderConfig, profile: Profile) -> Result<Self> {
+        if profile == Profile::Lc {
+            return Self::new(config);
+        }
+        let rate = config.sample_rate;
+        if !HE_AAC_RATES.contains(&rate) {
+            return Err(Error::Config(format!(
+                "HE-AAC encodes at {HE_AAC_RATES:?} Hz, not {rate} Hz: resample to one of them"
+            )));
+        }
+        let v2 = profile == Profile::HeAacV2;
+        if v2 && config.channels != 2 {
+            return Err(Error::Config(format!(
+                "HE-AAC v2 (parametric stereo) takes stereo input, not {} channels",
+                config.channels
+            )));
+        }
+        let bitrate = if config.bitrate == 0 { default_he_aac_bitrate(profile, config.channels) } else { config.bitrate };
+        let core_channels = if v2 { 1 } else { config.channels };
+        let main = u32::from(core_channels) - u32::from(core_channels >= 6);
+        let (lo, hi) = if v2 { (16_000, 64_000) } else { (12_000 * main, 64_000 * main) };
+        if bitrate < lo || bitrate > hi {
+            return Err(Error::Config(format!(
+                "{profile:?} bit rate {bitrate} b/s for {} channels (allowed {lo}..={hi})",
+                config.channels
+            )));
+        }
+        let core_config = EncoderConfig { sample_rate: rate / 2, channels: core_channels, bitrate };
+        let elements = channel_elements(core_channels).expect("a channel configuration").1;
+        let sbr_elements: Vec<Vec<usize>> = elements
+            .iter()
+            .filter(|(kind, _)| *kind != ElementKind::Lfe)
+            .map(|(kind, ch)| if *kind == ElementKind::Cpe { ch.to_vec() } else { vec![ch[0]] })
+            .collect();
+        let front = HeFrontEnd::new(rate, usize::from(config.channels), usize::from(core_channels), v2, &sbr_elements, bitrate / main);
+        let mut enc = Self::core(core_config, Some(32 * front.kx()))?;
+        enc.he = Some(Box::new(HeAac { profile, rate, channels: config.channels, front, samples_in: 0 }));
+        Ok(enc)
+    }
+
+    /// The AAC-LC encoder: `max_line` overrides the bandwidth (an HE-AAC
+    /// core stops at the SBR crossover).
+    fn core(config: EncoderConfig, max_line_override: Option<usize>) -> Result<Self> {
+        let rate = config.sample_rate;
+        let tables = tables::for_rate(rate).expect("every coded rate has tables");
         let (channel_configuration, layout) =
             channel_elements(config.channels).ok_or_else(|| {
                 Error::Config(format!(
@@ -305,7 +425,9 @@ impl Encoder {
             .collect::<Vec<_>>();
 
         let cutoff = bandwidth_hz(bitrate / main_channels, rate);
-        let max_line = ((cutoff / (f64::from(rate) / 2.0) * 1024.0).ceil() as usize).min(1024);
+        let max_line = max_line_override
+            .unwrap_or(((cutoff / (f64::from(rate) / 2.0) * 1024.0).ceil() as usize).min(1024))
+            .min(1024);
         let mut chans: Vec<ChannelState> = (0..config.channels)
             .map(|_| ChannelState {
                 pcm: vec![0.0; FRAME_SAMPLES],
@@ -358,17 +480,57 @@ impl Encoder {
             frames_out: 0,
             block_switching: true,
             exercise: Exercise::default(),
+            he: None,
         })
     }
 
-    /// The AudioSpecificConfig (ISO/IEC 14496-3 1.6.2.1) for the MP4 `esds`.
+    /// The AudioSpecificConfig (ISO/IEC 14496-3 1.6.2.1) for the MP4 `esds`:
+    /// the AAC-LC (core) configuration; an HE-AAC stream signals SBR and PS
+    /// implicitly with it. [`Self::audio_specific_config_with`] writes the
+    /// explicit forms.
     pub fn audio_specific_config(&self) -> [u8; 2] {
         self.asc
     }
 
-    /// The rate the stream is coded at (the timescale of its packets).
+    /// The AudioSpecificConfig with SBR and PS signalled as `signalling`
+    /// asks; for AAC-LC always the plain configuration.
+    pub fn audio_specific_config_with(&self, signalling: Signalling) -> Vec<u8> {
+        let Some(he) = &self.he else { return self.asc.to_vec() };
+        syntax::he_aac_audio_specific_config(
+            self.tables.index,
+            self.channel_configuration,
+            he.rate,
+            he.profile == Profile::HeAacV2,
+            signalling,
+        )
+    }
+
+    /// The rate the AAC-LC (core) stream is coded at: the input's for
+    /// AAC-LC, half of it for HE-AAC.
     pub fn coding_rate(&self) -> u32 {
         self.tables.rate
+    }
+
+    /// The profile this encoder produces.
+    pub fn profile(&self) -> Profile {
+        self.he.as_ref().map_or(Profile::Lc, |h| h.profile)
+    }
+
+    /// The input and decoded output rate (the timescale of an MP4 track).
+    pub fn sample_rate(&self) -> u32 {
+        self.he.as_ref().map_or(self.tables.rate, |h| h.rate)
+    }
+
+    /// Output samples per channel each access unit decodes to: 1024 for
+    /// AAC-LC, 2048 for HE-AAC.
+    pub fn frame_samples(&self) -> usize {
+        if self.he.is_some() { 2 * FRAME_SAMPLES } else { FRAME_SAMPLES }
+    }
+
+    /// Priming samples at the start of the decoded output, at the output
+    /// rate: [`ENCODER_DELAY`] for AAC-LC, [`HE_AAC_DELAY`] for HE-AAC.
+    pub fn delay(&self) -> u32 {
+        if self.he.is_some() { HE_AAC_DELAY } else { ENCODER_DELAY }
     }
 
     /// sampling_frequency_index, for an ADTS header.
@@ -381,9 +543,10 @@ impl Encoder {
         self.channel_configuration
     }
 
-    /// The configured channel count.
+    /// The configured (input) channel count: for HE-AAC v2 two, though the
+    /// core is mono.
     pub fn channels(&self) -> u8 {
-        self.channels
+        self.he.as_ref().map_or(self.channels, |h| h.channels)
     }
 
     /// Never switch to short blocks: a test and measurement knob.
@@ -404,6 +567,14 @@ impl Encoder {
     /// that became ready: one per 1024 samples, running one frame behind
     /// the input for the block-switching lookahead.
     pub fn encode(&mut self, samples: &[f32]) -> Vec<Vec<u8>> {
+        if let Some(he) = self.he.as_mut() {
+            he.samples_in += (samples.len() / usize::from(he.channels)) as u64;
+            let scaled: Vec<f32> = samples.iter().map(|&s| sanitize(s) * 32768.0).collect();
+            let core = he.front.push(&scaled);
+            self.samples_in += (core.len() / usize::from(self.channels)) as u64;
+            self.push_scaled(&core);
+            return self.encode_ready();
+        }
         self.samples_in += (samples.len() / usize::from(self.channels)) as u64;
         self.push(samples);
         self.encode_ready()
@@ -413,13 +584,19 @@ impl Encoder {
     /// decoded output covers the priming plus every sample passed to
     /// [`Self::encode`].
     pub fn flush(&mut self) -> Vec<Vec<u8>> {
-        self.finish(self.samples_in)
+        match &self.he {
+            Some(he) => self.finish(he.samples_in),
+            None => self.finish(self.samples_in),
+        }
     }
 
     /// [`Self::flush`] for a caller that knows how many of the samples it
     /// passed are real (a resampler's padded tail is not): the output
     /// covers the priming plus `samples`, padding with silence as needed.
     pub fn finish(&mut self, samples: u64) -> Vec<Vec<u8>> {
+        if self.he.is_some() {
+            return self.finish_he(samples);
+        }
         let needed = if samples == 0 {
             0
         } else {
@@ -438,6 +615,31 @@ impl Encoder {
         (0..remaining).map(|_| self.encode_frame()).collect()
     }
 
+    /// [`Self::finish`] for HE-AAC: silence through the front end until the
+    /// SBR data and the core cover the priming plus `samples`, then the
+    /// core's own end.
+    fn finish_he(&mut self, samples: u64) -> Vec<Vec<u8>> {
+        let he = self.he.as_mut().expect("an HE-AAC encoder");
+        let frame = 2 * FRAME_SAMPLES as u64;
+        let needed = if samples == 0 { 0 } else { (samples + u64::from(HE_AAC_DELAY)).div_ceil(frame) };
+        let mut out = Vec::new();
+        // The front end must have analysed every slot the last frame's SBR
+        // data looks at, and the core every sample of its frames.
+        let input_needed = needed * frame + 2 * frame;
+        let have = he.samples_in;
+        if input_needed > have {
+            let zeros = vec![0.0f32; ((input_needed - have) as usize) * usize::from(he.channels)];
+            let core = he.front.push(&zeros);
+            self.push_scaled(&core);
+            out.extend(self.encode_ready_until(needed));
+        }
+        let remaining = needed.saturating_sub(self.frames_out) as usize;
+        for _ in 0..remaining {
+            out.push(self.encode_frame());
+        }
+        out
+    }
+
     /// Queue interleaved input (at the coding rate) per channel, in the
     /// 16-bit scale the decoder's output is defined in. A NaN or a wild
     /// value would poison every band it touches, so they are zeroed /
@@ -445,25 +647,42 @@ impl Encoder {
     fn push(&mut self, samples: &[f32]) {
         let n = usize::from(self.channels);
         for (c, ch) in self.chans.iter_mut().enumerate() {
-            ch.pcm.extend(samples.iter().skip(c).step_by(n).map(|&s| {
-                if s.is_finite() {
-                    s.clamp(-8.0, 8.0) * 32768.0
-                } else {
-                    0.0
-                }
-            }));
+            ch.pcm.extend(samples.iter().skip(c).step_by(n).map(|&s| sanitize(s) * 32768.0));
+        }
+    }
+
+    /// [`Self::push`] for input already in the 16-bit scale (the HE-AAC
+    /// front end's core signal).
+    fn push_scaled(&mut self, samples: &[f32]) {
+        let n = usize::from(self.channels);
+        for (c, ch) in self.chans.iter_mut().enumerate() {
+            ch.pcm.extend(samples.iter().skip(c).step_by(n));
         }
     }
 
     fn encode_ready(&mut self) -> Vec<Vec<u8>> {
+        self.encode_ready_until(u64::MAX)
+    }
+
+    /// The access units the queued input allows, up to frame `limit`.
+    fn encode_ready_until(&mut self, limit: u64) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        while self.chans[0].pcm.len() >= 3 * FRAME_SAMPLES {
+        while self.chans[0].pcm.len() >= 3 * FRAME_SAMPLES && self.frames_out < limit {
             out.push(self.encode_frame());
         }
         out
     }
 
     fn encode_frame(&mut self) -> Vec<u8> {
+        // The SBR data of this frame, one fill element per SCE / CPE.
+        let sbr: Vec<sbr::Bits> = match self.he.as_mut() {
+            Some(he) => {
+                debug_assert!(he.front.ready(self.frames_out), "SBR data asked for too early");
+                he.front.frame(self.frames_out)
+            }
+            None => Vec::new(),
+        };
+        let sbr_bits: usize = sbr.iter().map(sbr::Bits::len).sum();
         // Transients: this frame's zone (computed a frame ago, except at the
         // very start) and the next frame's.
         let mut next_zones = Vec::with_capacity(self.chans.len());
@@ -573,11 +792,12 @@ impl Encoder {
         let budget = (target as i64).clamp(floor, mean + self.rc.reservoir.max(0));
         self.rc.log_pe_avg = 0.9 * self.rc.log_pe_avg + 0.1 * log_pe;
         // Room for the END element and byte alignment.
-        let element_budget = (budget - 3 - 7).max(0) as usize;
+        let element_budget = (budget - 3 - 7 - sbr_bits as i64).max(0) as usize;
         let coded = self.search(&frames, &ms, element_budget);
 
         // Bitstream.
         let mut w = BitWriter::with_capacity(budget as usize / 8 + 64);
+        let mut sbr_elements = sbr.iter();
         for (e, el) in self.elements.iter().enumerate() {
             match el.kind {
                 ElementKind::Sce | ElementKind::Lfe => {
@@ -612,6 +832,12 @@ impl Encoder {
                     syntax::write_ics(&mut w, &frames[a], &coded[a], true, self.exercise);
                     syntax::write_ics(&mut w, &frames[b], &coded[b], true, self.exercise);
                 }
+            }
+            // An SCE's or CPE's SBR data follows it (14496-3 4.5.2.8.2.2).
+            if el.kind != ElementKind::Lfe
+                && let Some(fill) = sbr_elements.next()
+            {
+                fill.write(&mut w);
             }
         }
         // Pad with fill elements when the reservoir would overflow: a
@@ -845,6 +1071,12 @@ impl Encoder {
         }
         (coded, bits)
     }
+}
+
+/// Zero a NaN and clamp a wild value (8x full scale still codes: the
+/// scalefactor range covers it).
+fn sanitize(s: f32) -> f32 {
+    if s.is_finite() { s.clamp(-8.0, 8.0) } else { 0.0 }
 }
 
 fn two_mut<T>(v: &mut [T], a: usize, b: usize) -> (&mut T, &mut T) {

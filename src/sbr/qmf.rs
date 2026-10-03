@@ -66,7 +66,6 @@ fn synthesis32_matrix() -> &'static Matrix {
     })
 }
 
-#[allow(dead_code)] // the encoder's
 fn analysis64_matrix() -> &'static Matrix {
     static M: OnceLock<Matrix> = OnceLock::new();
     // M(k, n) = exp(i pi (k + 0.5)(2n + 1) / 128).
@@ -195,7 +194,6 @@ impl Synthesis32 {
 
 /// The encoder's 64-band analysis bank (Figure 4.B.16).
 #[derive(Clone)]
-#[allow(dead_code)] // the encoder's
 pub(crate) struct Analysis64 {
     x: Vec<f32>,
 }
@@ -206,7 +204,6 @@ impl Default for Analysis64 {
     }
 }
 
-#[allow(dead_code)] // the encoder's
 impl Analysis64 {
     /// Filter 64 new input samples (oldest first) into one slot of 64
     /// subband samples.
@@ -360,3 +357,4 @@ mod tests {
         }
     }
 }
+
