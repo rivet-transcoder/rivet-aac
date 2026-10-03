@@ -6,8 +6,10 @@
 //! prediction, which it rejects). It re-parses every access unit bit by bit,
 //! so a syntax slip in the encoder shows up as a parse failure or a garbled
 //! signal here, and it lets CI measure SNR without any external decoder.
-//! The ffmpeg tests at the bottom decode the same streams with an
-//! independent implementation when `ffmpeg` is on PATH.
+//! The faad tests at the bottom decode the same streams with an
+//! independent implementation, faad2's `faad` command-line decoder used as a
+//! black box, when it is on PATH (or named by `FAAD`); `AAC_REQUIRE_FAAD`
+//! makes its absence a failure, as in CI.
 
 use std::collections::HashMap;
 use std::f64::consts::PI;
@@ -783,39 +785,68 @@ fn multichannel_layouts_keep_each_channel_in_its_slot() {
     }
 }
 
-// ---------------------------------------------------------------- ffmpeg
+// ---------------------------------------------------------------- faad
 
-/// Whether an `ffmpeg` binary is on PATH; the tests below are skipped
-/// (with a note) when it is not, as on CI runners without it.
-fn ffmpeg_available() -> bool {
-    std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+fn faad() -> String {
+    std::env::var("FAAD").unwrap_or_else(|_| "faad".to_string())
 }
 
-/// Decode an ADTS stream with ffmpeg: returns interleaved f32 samples and
-/// ffmpeg's stderr (with `-v error`, empty unless something was wrong).
-fn ffmpeg_decode(adts: &[u8], tag: &str) -> (Vec<f32>, String) {
+/// Whether faad2's `faad` runs; the tests below are skipped (with a note)
+/// when it does not, unless `AAC_REQUIRE_FAAD` is set.
+fn faad_available() -> bool {
+    if std::process::Command::new(faad()).arg("-h").output().is_ok() {
+        return true;
+    }
+    assert!(
+        std::env::var_os("AAC_REQUIRE_FAAD").is_none(),
+        "AAC_REQUIRE_FAAD is set but faad is not on PATH (or FAAD)"
+    );
+    eprintln!("faad not on PATH: skipping the external-decoder check");
+    false
+}
+
+/// Decode an ADTS stream with faad: interleaved f32 samples, the rate and
+/// channel count it output, and its stderr when it failed. A mono stream
+/// comes back from faad as two identical channels; that is undone here.
+fn faad_decode(adts: &[u8], tag: &str) -> (Vec<f32>, u32, usize, String) {
     let dir = std::env::temp_dir();
     let src = dir.join(format!("rivet-aac-{}-{tag}.aac", std::process::id()));
+    let wav = src.with_extension("wav");
     std::fs::write(&src, adts).unwrap();
-    let out = std::process::Command::new("ffmpeg")
-        .args(["-v", "error", "-xerror", "-i"])
+    let out = std::process::Command::new(faad())
+        .args(["-b", "4", "-o"])
+        .arg(&wav)
         .arg(&src)
-        .args(["-f", "f32le", "-"])
         .output()
         .unwrap();
     let _ = std::fs::remove_file(&src);
-    let pcm = out
-        .stdout
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|b| f32::from_le_bytes(*b))
-        .collect();
-    (pcm, String::from_utf8_lossy(&out.stderr).into_owned())
+    let data = std::fs::read(&wav).unwrap_or_default();
+    let _ = std::fs::remove_file(&wav);
+    let err = if out.status.success() { String::new() } else { String::from_utf8_lossy(&out.stderr).into_owned() };
+    let (mut rate, mut channels, mut i) = (0u32, 0usize, 12);
+    let mut pcm = Vec::new();
+    while i + 8 <= data.len() {
+        let len = u32::from_le_bytes(data[i + 4..i + 8].try_into().unwrap()) as usize;
+        match &data[i..i + 4] {
+            b"fmt " => {
+                channels = usize::from(u16::from_le_bytes([data[i + 10], data[i + 11]]));
+                rate = u32::from_le_bytes(data[i + 12..i + 16].try_into().unwrap());
+            }
+            b"data" => {
+                let end = (i + 8 + len).min(data.len());
+                pcm = data[i + 8..end].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
+                break;
+            }
+            _ => {}
+        }
+        i += 8 + len + (len & 1);
+    }
+    if channels == 2 && adts.len() > 3 && ((adts[2] & 1) << 2) | (adts[3] >> 6) == 1 {
+        let (l, r): (Vec<f32>, Vec<f32>) = pcm.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).unzip();
+        assert_eq!(l, r, "{tag}: faad's two channels of a mono stream differ");
+        (pcm, channels) = (l, 1);
+    }
+    (pcm, rate, channels, err)
 }
 
 fn to_adts(enc: &Encoder, aus: &[Vec<u8>]) -> Vec<u8> {
@@ -825,13 +856,16 @@ fn to_adts(enc: &Encoder, aus: &[Vec<u8>]) -> Vec<u8> {
 }
 
 #[test]
-fn ffmpeg_decodes_every_rate_bit_rate_and_layout_without_errors() {
-    if !ffmpeg_available() {
-        eprintln!("ffmpeg not on PATH: skipping the external-decoder check");
+fn faad_decodes_every_rate_bit_rate_and_layout_without_errors() {
+    if !faad_available() {
         return;
     }
     let mut cases = Vec::new();
-    for rate in SUPPORTED_RATES {
+    // faad takes an AAC-LC ADTS stream at 24 kHz or below for possible
+    // implicit SBR and outputs it upsampled; tests/faad_oracle.rs gives it
+    // those rates in MP4 with explicit signalling, where it agrees with this
+    // crate's decoder to ~134 dB.
+    for rate in SUPPORTED_RATES.into_iter().filter(|&r| r >= 32_000) {
         for (channels, bitrates) in [
             (1u8, vec![32_000u32, 64_000, 128_000]),
             (2, vec![32_000, 96_000, 128_000, 192_000, 320_000]),
@@ -874,14 +908,15 @@ fn ffmpeg_decodes_every_rate_bit_rate_and_layout_without_errors() {
         }
         let mut aus = enc.encode(&samples);
         aus.extend(enc.flush());
-        let (pcm, err) = ffmpeg_decode(
+        let (pcm, out_rate, out_channels, err) = faad_decode(
             &to_adts(&enc, &aus),
             &format!("{rate}-{channels}-{bitrate}"),
         );
         assert!(
             err.trim().is_empty(),
-            "{rate} Hz, {channels} ch, {bitrate} b/s: ffmpeg said: {err}"
+            "{rate} Hz, {channels} ch, {bitrate} b/s: faad said: {err}"
         );
+        assert_eq!((out_rate, out_channels), (rate, channels as usize), "{rate}/{channels}/{bitrate}");
         assert_eq!(
             pcm.len(),
             aus.len() * 1024 * channels as usize,
@@ -907,7 +942,7 @@ fn ffmpeg_decodes_every_rate_bit_rate_and_layout_without_errors() {
             worst = worst.min(snr);
         }
         eprintln!(
-            "ffmpeg {rate} Hz {channels} ch @{bitrate}: {:.0} b/s, output->input slots {mapping:?}, worst SNR {worst:.1} dB",
+            "faad {rate} Hz {channels} ch @{bitrate}: {:.0} b/s, output->input slots {mapping:?}, worst SNR {worst:.1} dB",
             bitrate_of(&aus, rate)
         );
         assert!(worst > 1.0, "{rate}/{channels}/{bitrate}: {worst}");
@@ -918,14 +953,13 @@ fn ffmpeg_decodes_every_rate_bit_rate_and_layout_without_errors() {
     }
 }
 
-/// The reference decoder above and ffmpeg's decoder are independent
+/// The reference decoder above and faad2's decoder are independent
 /// readings of the standard; on the same streams they must produce the same
 /// samples (to float rounding). This is what lets the CI-side SNR figures
 /// stand for what a real decoder hears.
 #[test]
-fn reference_decoder_agrees_with_ffmpeg() {
-    if !ffmpeg_available() {
-        eprintln!("ffmpeg not on PATH: skipping the external-decoder check");
+fn reference_decoder_agrees_with_faad() {
+    if !faad_available() {
         return;
     }
     for (rate, channels, bitrate) in [
@@ -953,8 +987,9 @@ fn reference_decoder_agrees_with_ffmpeg() {
         let mut aus = enc.encode(&samples);
         aus.extend(enc.flush());
 
-        let (pcm, err) = ffmpeg_decode(&to_adts(&enc, &aus), &format!("agree-{rate}-{channels}"));
-        assert!(err.trim().is_empty(), "ffmpeg said: {err}");
+        let (pcm, out_rate, out_channels, err) = faad_decode(&to_adts(&enc, &aus), &format!("agree-{rate}-{channels}"));
+        assert!(err.trim().is_empty(), "faad said: {err}");
+        assert_eq!((out_rate, out_channels), (rate, channels as usize));
         let mut dec = RefDecoder::new(rate);
         let order = element_order(channels);
         let mut ours = vec![Vec::new(); channels as usize];
@@ -969,7 +1004,7 @@ fn reference_decoder_agrees_with_ffmpeg() {
             assert_eq!(theirs.len(), ch.len());
             let agree = snr_db(&theirs, ch);
             eprintln!(
-                "{rate} Hz {channels} ch, channel {c}: reference vs ffmpeg decode agree to {agree:.1} dB"
+                "{rate} Hz {channels} ch, channel {c}: reference vs faad decode agree to {agree:.1} dB"
             );
             assert!(agree > 70.0, "{rate}/{channels}, channel {c}: {agree}");
         }

@@ -1,6 +1,6 @@
 //! Decoder tests that need no external tools: round trips through this
 //! crate's encoder, the transports, and malformed input. The comparisons
-//! against ffmpeg's decoder are in `tests/ffmpeg_oracle.rs`.
+//! against faad2's decoder are in `tests/faad_oracle.rs`.
 
 use super::*;
 use crate::encode::{self, Encoder, EncoderConfig};
