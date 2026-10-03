@@ -31,27 +31,27 @@ jobs:
         run: cargo test --test fuzz
 
   # The decoder is checked against an independent implementation, used only
-  # as a black box: ffmpeg makes the test streams and decodes them, and the
-  # PCM is compared. Without ffmpeg on PATH those tests skip, so this job
-  # installs it and says so if they did not run.
+  # as a black box: faad2's `faad` decodes the committed fdk-aac streams and
+  # this crate's encoder output, and the PCM is compared. Without faad on
+  # PATH those tests skip, so this job installs it and makes a skip a failure.
   oracle:
-    name: tests against ffmpeg (black box)
+    name: tests against faad2 (black box)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends faad
       - name: Tests
         run: cargo test --release
         env:
-          AAC_REQUIRE_FFMPEG: "1"
+          AAC_REQUIRE_FAAD: "1"
 
-  # The HE-AAC and HE-AAC v2 decoder against the ISO/IEC 14496-26
+  # The AAC-LC, HE-AAC and HE-AAC v2 decoder against the ISO/IEC 14496-26
   # conformance streams and reference waveforms, as data: fetched from ISO's
   # electronic inserts (only the members the test reads) and compared.
   conformance:
-    name: ISO/IEC 14496-26 conformance streams (HE-AAC, HE-AAC v2)
+    name: ISO/IEC 14496-26 conformance streams (AAC-LC, HE-AAC, HE-AAC v2)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,7 +60,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: conformance
-          key: iso-14496-26-ed2-he-aac-v1
+          key: iso-14496-26-ed2-${{ hashFiles('tools/fetch_conformance.py') }}
       - run: python3 tools/fetch_conformance.py conformance
       - name: Conformance
         run: cargo test --release --test conformance -- --nocapture
