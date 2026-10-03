@@ -457,6 +457,30 @@ fn he_aac_signalling_forms_decode_alike() {
     }
 }
 
+/// Mono HE-AAC (v1) signalled backward compatibly says there is no PS
+/// (`syncExtensionType` 0x548, `psPresentFlag` 0), and decodes to one
+/// channel.
+#[test]
+fn mono_he_aac_says_it_has_no_parametric_stereo() {
+    let rate = 32_000;
+    let (enc, aus) = he_encode(&[low_tones(rate, 20_000, 1.0)], rate, Profile::HeAac, 0);
+    let asc = enc.audio_specific_config_with(Signalling::BackwardCompatible);
+    // LC 16 kHz mono and its GASpecificConfig (16 bits), 0x2B7 (11), SBR
+    // (5), sbrPresentFlag (1), the 32 kHz index (4), 0x548 (11),
+    // psPresentFlag 0 (1): 49 bits.
+    assert_eq!(asc.len(), 7, "{asc:02x?}");
+    let bits = u64::from_be_bytes([0, asc[0], asc[1], asc[2], asc[3], asc[4], asc[5], asc[6]]) >> (56 - 49);
+    assert_eq!((bits >> 1) & 0x7ff, 0x548, "{asc:02x?}");
+    assert_eq!(bits & 1, 0, "psPresentFlag");
+    let parsed = AudioSpecificConfig::parse(&asc).unwrap();
+    assert!(parsed.sbr.explicit_sbr && !parsed.sbr.explicit_ps);
+    let (out_rate, channels, _) = decode_all(&mut Decoder::new_raw(&asc).unwrap(), &aus);
+    assert_eq!((out_rate, channels), (rate, 1));
+    // Stereo HE-AAC has no use for the flag and carries none.
+    let (enc, _) = he_encode(&[low_tones(rate, 4096, 1.0), low_tones(rate, 4096, 0.5)], rate, Profile::HeAac, 0);
+    assert_eq!(enc.audio_specific_config_with(Signalling::BackwardCompatible).len(), 5);
+}
+
 #[test]
 fn he_aac_encoder_refuses_what_it_cannot_code() {
     let cfg = |sample_rate, channels| EncoderConfig { sample_rate, channels, bitrate: 0 };

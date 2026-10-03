@@ -272,6 +272,12 @@ pub(super) fn he_aac_audio_specific_config(
             if ps {
                 w.put(0x548, 11); // syncExtensionType
                 w.put(1, 1); // psPresentFlag
+            } else if channel_configuration == 1 {
+                // A mono core with SBR alone: say there is no PS, so a
+                // decoder need not keep a stereo output ready for one (PS
+                // could otherwise turn up in the SBR extension data).
+                w.put(0x548, 11); // syncExtensionType
+                w.put(0, 1); // psPresentFlag
             }
         }
     }
