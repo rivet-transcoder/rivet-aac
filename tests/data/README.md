@@ -1,46 +1,49 @@
 # Test streams
 
 Short AAC streams (two seconds each) that the decoder is checked against,
-made by encoders other than this crate's so the decoder meets syntax this
-crate never writes. `tests/ffmpeg_oracle.rs` decodes each with the decoder
-and with ffmpeg's, as a black box, and compares the PCM (or, for HE-AAC,
-checks that the decoder's core-only mode gives the AAC-LC core at half the
-rate). The HE-AAC decoding itself is checked against ISO's conformance
-streams instead (`tests/conformance.rs`).
+made by an encoder other than this crate's so the decoder meets syntax this
+crate never writes. `tests/faad_oracle.rs` decodes each with the decoder and
+with faad2's `faad`, as a black box, and compares the PCM (HE-AAC and HE-AAC
+v2 included, decoded in full); `tests/conformance.rs` checks that the
+HE-AAC ones decode with SBR and PS, and that core-only mode gives their
+AAC-LC core at half the rate. The decoder itself is held to ISO's
+conformance streams (`tests/conformance.rs`).
 
-Every stream was made with the `ffmpeg` in the `linuxserver/ffmpeg` image
-(ffmpeg 9.0, built with `libfdk_aac`), run only as a command-line tool, from
-the same test signal `tests/ffmpeg_oracle.rs` uses (`source_expr`: two tones,
-noise bursts and decaying clicks per channel, different in every channel):
+Every stream was made by `tools/make_test_streams.py`, which drives the
+Fraunhofer FDK AAC encoder library (libfdk-aac 2.0.3) through its public C
+API with ctypes, from a test signal it makes itself (two tones, a beating
+tone, noise bursts and decaying clicks per channel, different in every
+channel), and writes the MP4 files itself; nothing else touched them:
 
 ```sh
-ffmpeg -f lavfi -i "aevalsrc='<source_expr(channels)>':s=<rate>:c=<layout>:d=2" <encoder options> <file>
+FDK_AAC=/path/to/libfdk-aac.so.2 python3 tools/make_test_streams.py
 ```
 
-| file | rate | layout | encoder options |
+| file | rate | layout | encoder settings |
 |---|---|---|---|
-| `fdk-lc-8000-mono-12k.aac` | 8000 | mono | `-c:a libfdk_aac -b:a 12k -f adts` |
-| `fdk-lc-11025-mono-16k.aac` | 11025 | mono | `-c:a libfdk_aac -b:a 16k -f adts` |
-| `fdk-lc-12000-mono-16k.aac` | 12000 | mono | `-c:a libfdk_aac -b:a 16k -f adts` |
-| `fdk-lc-16000-stereo-32k.aac` | 16000 | stereo | `-c:a libfdk_aac -b:a 32k -f adts` |
-| `fdk-lc-22050-stereo-40k.aac` | 22050 | stereo | `-c:a libfdk_aac -b:a 40k -f adts` |
-| `fdk-lc-32000-mono-24k.aac` | 32000 | mono | `-c:a libfdk_aac -b:a 24k -f adts` |
-| `fdk-lc-44100-stereo-vbr.m4a` | 44100 | stereo | `-c:a libfdk_aac -vbr 3` |
-| `fdk-lc-48000-5_1-256k.aac` | 48000 | 5.1 | `-c:a libfdk_aac -b:a 256k -f adts` |
-| `fdk-lc-48000-7_1-448k.m4a` | 48000 | 7.1 | `-c:a libfdk_aac -b:a 448k` |
-| `fdk-lc-64000-stereo-192k.aac` | 64000 | stereo | `-c:a libfdk_aac -b:a 192k -f adts` |
-| `fdk-lc-88200-stereo-256k.aac` | 88200 | stereo | `-c:a libfdk_aac -b:a 256k -f adts` |
-| `fdk-lc-96000-stereo-256k.m4a` | 96000 | stereo | `-c:a libfdk_aac -b:a 256k` |
-| `he-aac-44100-stereo-implicit.aac` | 44100 | stereo | `-c:a libfdk_aac -profile:a aac_he -b:a 48k -f adts` |
-| `he-aac-44100-stereo-backcompat.m4a` | 44100 | stereo | `-c:a libfdk_aac -profile:a aac_he -b:a 48k -signaling explicit_sbr` |
-| `he-aac-48000-stereo-explicit.m4a` | 48000 | stereo | `-c:a libfdk_aac -profile:a aac_he -b:a 64k -signaling explicit_hierarchical` |
-| `he-aac-48000-5_1-implicit.aac` | 48000 | 5.1 | `-c:a libfdk_aac -profile:a aac_he -b:a 160k -f adts` |
-| `he-aac-v2-32000-stereo-implicit.aac` | 32000 | stereo | `-c:a libfdk_aac -profile:a aac_he_v2 -b:a 24k -f adts` |
-| `he-aac-v2-44100-stereo.m4a` | 44100 | stereo | `-c:a libfdk_aac -profile:a aac_he_v2 -b:a 32k -signaling explicit_hierarchical` |
+| `fdk-lc-8000-mono-12k.aac` | 8000 | mono | AAC-LC, CBR 12 kb/s, ADTS |
+| `fdk-lc-11025-mono-16k.aac` | 11025 | mono | AAC-LC, CBR 16 kb/s, ADTS |
+| `fdk-lc-12000-mono-16k.aac` | 12000 | mono | AAC-LC, CBR 16 kb/s, ADTS |
+| `fdk-lc-16000-stereo-32k.aac` | 16000 | stereo | AAC-LC, CBR 32 kb/s, ADTS |
+| `fdk-lc-22050-stereo-40k.aac` | 22050 | stereo | AAC-LC, CBR 40 kb/s, ADTS |
+| `fdk-lc-32000-mono-24k.aac` | 32000 | mono | AAC-LC, CBR 24 kb/s, ADTS |
+| `fdk-lc-44100-stereo-vbr.m4a` | 44100 | stereo | AAC-LC, VBR mode 3, MP4 |
+| `fdk-lc-48000-5_1-256k.aac` | 48000 | 5.1 | AAC-LC, CBR 256 kb/s, ADTS |
+| `fdk-lc-48000-7_1-448k.m4a` | 48000 | 7.1 | AAC-LC, CBR 448 kb/s, MP4; MODE_7_1_REAR_SURROUND (a program_config_element) |
+| `fdk-lc-64000-stereo-192k.aac` | 64000 | stereo | AAC-LC, CBR 192 kb/s, ADTS |
+| `fdk-lc-88200-stereo-256k.aac` | 88200 | stereo | AAC-LC, CBR 256 kb/s, ADTS |
+| `fdk-lc-96000-stereo-256k.m4a` | 96000 | stereo | AAC-LC, CBR 256 kb/s, MP4 |
+| `he-aac-44100-stereo-implicit.aac` | 44100 | stereo | HE-AAC, 48 kb/s, ADTS (implicit signalling) |
+| `he-aac-44100-stereo-backcompat.m4a` | 44100 | stereo | HE-AAC, 48 kb/s, MP4, backward-compatible explicit signalling |
+| `he-aac-48000-stereo-explicit.m4a` | 48000 | stereo | HE-AAC, 64 kb/s, MP4, hierarchical explicit signalling |
+| `he-aac-48000-5_1-implicit.aac` | 48000 | 5.1 | HE-AAC, 160 kb/s, ADTS (implicit) |
+| `he-aac-v2-32000-stereo-implicit.aac` | 32000 | stereo | HE-AAC v2, 24 kb/s, ADTS (implicit) |
+| `he-aac-v2-44100-stereo.m4a` | 44100 | stereo | HE-AAC v2, 32 kb/s, MP4, hierarchical explicit signalling |
+
 
 The streams are encoder output only; no encoder's source is part of this
-repository or was consulted to write it. ffmpeg's own AAC encoder makes the
-larger matrix `tests/ffmpeg_oracle.rs` generates at test time (every layout
-from mono to 7.1, program_config_element layouts, 22.05–48 kHz, 32–320
-kb/s, CBR and VBR, ADTS and MP4, with and without PNS, intensity stereo and
-TNS), which needs no committed files.
+repository or was consulted to write it. A rerun with another libfdk-aac
+version need not reproduce them byte for byte. The larger matrix
+`tests/faad_oracle.rs` makes at test time (every layout from mono to 7.1,
+every coding rate, 32–320 kb/s, AAC-LC, HE-AAC and HE-AAC v2) comes from
+this crate's encoder and needs no committed files.
