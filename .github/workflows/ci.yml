@@ -47,6 +47,27 @@ jobs:
         env:
           AAC_REQUIRE_FFMPEG: "1"
 
+  # The HE-AAC and HE-AAC v2 decoder against the ISO/IEC 14496-26
+  # conformance streams and reference waveforms, as data: fetched from ISO's
+  # electronic inserts (only the members the test reads) and compared.
+  conformance:
+    name: ISO/IEC 14496-26 conformance streams (HE-AAC, HE-AAC v2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: conformance
+          key: iso-14496-26-ed2-he-aac-v1
+      - run: python3 tools/fetch_conformance.py conformance
+      - name: Conformance
+        run: cargo test --release --test conformance -- --nocapture
+        env:
+          AAC_CONFORMANCE_DIR: conformance
+          AAC_REQUIRE_CONFORMANCE: "1"
+
   msrv:
     name: MSRV (1.99)
     runs-on: ubuntu-latest
