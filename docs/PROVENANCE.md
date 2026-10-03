@@ -13,13 +13,22 @@ were used only as black boxes, never read.
 - **No AAC implementation's source was opened or read** in writing either
   half: not FFmpeg's (libavcodec), faad2, fdk-aac, FAAC, symphonia, NihAV,
   the 3GPP reference code, Apple's, Nero's, VisualOn's or any other.
-- **ffmpeg and ffprobe were used only as command-line tools**, as black-box
-  oracles: to make test streams, to decode them, and to compare the PCM.
-  The `ffmpeg` in Debian bookworm (5.1) decodes in the tests; the one in the
-  `linuxserver/ffmpeg` image (9.0, with `libfdk_aac`) made the committed
-  streams in `tests/data` ([its README](../tests/data/README.md) lists each
-  command). No table, constant or behaviour was derived by probing a decoder;
-  every figure the tests compare was computed from the standard first.
+- **Other implementations were used only as black boxes**, as oracles and
+  to make test streams, never read. faad2's `faad` command-line decoder
+  decodes in the tests (`tests/faad_oracle.rs`, the Ubuntu package in CI,
+  the MSYS2 build on Windows), and the PCM is compared. The Fraunhofer FDK
+  AAC encoder library (libfdk-aac 2.0.3), driven through its public C API by
+  `tools/make_test_streams.py`, made the committed streams in `tests/data`
+  ([its README](../tests/data/README.md) lists each). No table, constant or
+  behaviour was derived by probing a decoder; every figure the tests compare
+  was computed from the standard first.
+- **No ffmpeg.** Until 2026-10-02 the ffmpeg and ffprobe command-line tools
+  filled both roles above (ffmpeg's decoder in the tests; its native encoder
+  for streams made at test time, and its `libfdk_aac` wrapper for the
+  committed ones). They are gone from the tests, the test data and CI:
+  ISO/IEC 14496-26's AAC-LC conformance streams took over from ffmpeg's
+  encoder matrix, faad2 from its decoder, and the streams were remade
+  without it. The history below still names it where it was the tool used.
 - Where the standard leaves a choice to the decoder and a comparison showed
   another decoder choosing differently (a program_config_element whose
   elements do not fit its own position rules, an LFE that breaks subclause
@@ -117,8 +126,9 @@ Checks that a transcription slip would fail: every codebook is a complete
 prefix code of the size Table 59 gives (Kraft sum exactly 1) and every
 codeword decodes to its own index; every band table starts at 0, rises in
 multiples of four and ends at 1024 or 128; every TNS_MAX_BANDS fits its
-table; and the decoder's PCM agrees with ffmpeg's at every sampling rate the
-tables cover (see the README's figures).
+table; and the decoder meets ISO/IEC 14496-26's 16-bit conformance
+criterion on its AAC-LC streams at every sampling rate the tables cover,
+8 to 96 kHz (see the README's figures).
 
 Nothing else was transcribed. The windows are computed from their formulas
 (`tables/windows.rs`), the IMDCT from its definition (`mdct.rs`, tested

@@ -20,14 +20,15 @@ tables, the QMF window, the noise table, the hybrid filter prototypes and
 band maps) from ISO/IEC 14496-3:2009. docs/PROVENANCE.md records the copies
 they were transcribed from.
 
-The AAC-LC decoder is verified against ffmpeg's decoder, used only as a
-black box (a command-line tool whose PCM is compared); none of its code is
-included or was consulted. The test streams in tests/data were made by
-encoders run the same way, as command-line tools; they are encoder output
-only. The HE-AAC / HE-AAC v2 decoder is verified against the conformance
+The decoder (AAC-LC, HE-AAC, HE-AAC v2) is verified against the conformance
 streams and reference waveforms of ISO/IEC 14496-26, which are not part of
 this repository: tools/fetch_conformance.py downloads them from ISO, under
-ISO's terms for its electronic inserts.
+ISO's terms for its electronic inserts. It is also compared with faad2's
+decoder, used only as a black box (a command-line tool whose PCM is
+compared); none of its code is included or was consulted. The test streams
+in tests/data were made by the Fraunhofer FDK AAC encoder library, driven
+through its public API (tools/make_test_streams.py); they are encoder output
+only, and none of that library's code is included or was consulted.
 
 ------------------------------------------------------------------------------
 Patents

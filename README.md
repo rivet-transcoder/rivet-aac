@@ -5,11 +5,12 @@
 An **AAC-LC, HE-AAC and HE-AAC v2** encoder and decoder in Rust: no C, no
 system libraries, no build script, nothing to install on a build host.
 Written from ISO/IEC 13818-7 and ISO/IEC 14496-3 and published literature,
-not translated from any other implementation. The decoder agrees with
-ffmpeg's to float rounding on every AAC-LC stream it was checked on, and
-with the reference waveforms of all 73 ISO/IEC 14496-26 HE-AAC and HE-AAC v2
-conformance streams it reads, to 0.02 of a 16-bit LSB RMS or better (the
-figures are [below](#how-it-is-checked)).
+not translated from any other implementation. The decoder meets ISO/IEC
+14496-26's 16-bit conformance criterion on all 134 AAC-LC, HE-AAC and HE-AAC
+v2 conformance streams it is run on, the AAC-LC ones to a thousandth of an
+LSB, and agrees with faad2's decoder to float rounding (130 dB or better) on
+every AAC-LC stream it was compared on (the figures are
+[below](#how-it-is-checked)).
 
 Written for the **[rivet](https://github.com/rivet-transcoder/rivet)**
 transcoder, where it is the AAC codec on both sides: the encoder behind
@@ -130,6 +131,21 @@ the output.
 
 ## How it is checked
 
+- **AAC-LC against the conformance streams of ISO/IEC 14496-26** (second
+  edition), used as data, the same way (`tests/conformance.rs`,
+  `tools/fetch_conformance.py`): 61 streams, ten test families at six rates
+  each and between them all twelve rates from 8 to 96 kHz, mono to 5.1,
+  program_config_element layouts up to the 48 channels of `al08`, every
+  window sequence and shape, M/S, intensity stereo, TNS, pulses. The 49
+  without PNS decode within the 16-bit criterion with room to spare: the
+  worst RMS difference 3.7e-8 (0.001 LSB), the largest single difference
+  1.8e-7 (0.006 LSB). The 12 with perceptual noise substitution, whose noise
+  no two decoders generate alike, match the reference's energy (each
+  channel's within 0.00 dB, every 2048-sample block within 1.9 dB). Not in
+  the set: the 960-sample-frame (`sf`) streams, coupling channel elements
+  (`al07`), channel configurations 11 and up (`al20`, `al21`), which the
+  decoder refuses by name, and the dynamic range control families (`al14`,
+  `al16`), whose references apply DRC, which this decoder does not.
 - **HE-AAC and HE-AAC v2 against the conformance streams of ISO/IEC
   14496-26** (second edition), used as data (`tests/conformance.rs`;
   `tools/fetch_conformance.py` extracts the streams and reference waveforms
@@ -166,15 +182,16 @@ the output.
   symmetry; the hybrid filters summing back to a pure delay; mixing
   procedure Ra's power and level difference.
 
-- **Against ffmpeg's decoder, as a black box** (`tests/ffmpeg_oracle.rs`;
-  CI installs ffmpeg for it). ffmpeg's own encoder makes a matrix of streams
-  at test time, the committed streams in [`tests/data`](tests/data/README.md)
-  come from fdk-aac (through ffmpeg's command line), and both decoders
-  decode each; the PCM must agree to at least 90 dB SNR, channel by channel.
-  Figures: see the table below.
+- **Against faad2's decoder, as a black box** (`tests/faad_oracle.rs`; CI
+  installs faad2's `faad` for it and sets `AAC_REQUIRE_FAAD`, so a missing
+  binary fails rather than skips). The committed streams in
+  [`tests/data`](tests/data/README.md) come from fdk-aac, and this crate's
+  encoder makes a matrix at test time; both decoders decode each, and the
+  PCM must agree to at least 90 dB SNR channel by channel for AAC-LC, 45 dB
+  for HE-AAC. Figures: see the table below.
 - **Round trips** through this crate's encoder, in every layout, and the
   encoder's own suite (a small reference decoder written from the standard,
-  and ffmpeg decoding every rate × bit rate × layout without error).
+  and faad decoding every rate × bit rate × layout without error).
 - **Syntax no encoder above writes** — KBD windows in every frame, pulse
   data in every long window — from this encoder asked to emit it
   (`Encoder::exercise`), decoded by both decoders.
@@ -186,31 +203,38 @@ the output.
   decodes to its own index; every band table rises in multiples of four to
   1024 or 128; the windows meet the Princen-Bradley condition.
 
-Measured 2026-09-28 against the `ffmpeg` of Debian bookworm (5.1). SNR is
-this decoder's output against ffmpeg's, the worst channel of each stream:
+Measured 2026-10-02 against faad2 2.11.3. SNR is this decoder's output
+against faad's, the worst channel of each stream:
 
 | streams | made by | rates | layouts and tools | worst SNR | largest \|difference\| |
 |---|---|---|---|---|---|
-| 44, at test time | ffmpeg's encoder | 22.05–48 kHz | mono, stereo, 3.0, 4.0, 5.0, 5.1, 7.1; PCE quad, hexagonal, 6.1; 32–320 kb/s, CBR and VBR, ADTS and MP4; M/S, intensity stereo, TNS, short windows, KBD | 137.7 dB | 2.4e-7 |
-| 12, committed | fdk-aac | 8, 11.025, 12, 16, 22.05, 32, 44.1, 48, 64, 88.2, 96 kHz | mono to 7.1 (a PCE 7.1), CBR and VBR; TNS, M/S, intensity, KBD | 128.1 dB (7.1; the others 136.6 dB or better) | 2.0e-6 |
-| 9, at test time | this crate's encoder, exercising KBD and pulses | 32–48 kHz | mono, stereo, 5.1 | 138.1 dB | 1.8e-7 |
-| 2, at test time | ffmpeg's encoder with PNS | 48 kHz | stereo, 5.1 | noise bands: block energy within 0.00 dB | — |
-| 6, committed | fdk-aac, HE-AAC and HE-AAC v2 | 32–48 kHz (cores 16–24 kHz) | stereo, 5.1; implicit, explicit and backward-compatible signalling | decoded in core-only mode: core at half the rate, level within 0.6 dB of ffmpeg's full SBR decode | — |
+| 12, committed | fdk-aac | 8, 11.025, 12, 16, 22.05, 32, 44.1, 48, 64, 88.2, 96 kHz | mono to 7.1 (a PCE 7.1), CBR and VBR, ADTS and MP4; TNS, M/S, intensity, KBD | 130.9 dB (7.1; the others 132.3 dB or better) | 1.3e-6 |
+| 41, at test time | this crate's encoder | 22.05–48 kHz | mono, stereo, 3.0, 4.0, 5.0, 5.1, 7.1; 32–320 kb/s | 132.0 dB | 2.4e-7 |
+| 9, at test time | this crate's encoder, exercising KBD and pulses | 32–48 kHz | mono, stereo, 5.1 | 133.7 dB | 2.2e-7 |
+| 4, committed | fdk-aac, HE-AAC | 44.1, 48 kHz | stereo, 5.1; implicit, backward-compatible and hierarchical signalling | 53.0 dB | 2.1e-2 |
+| 9, at test time | this crate's encoder, HE-AAC | 32, 44.1, 48 kHz | mono, stereo, 5.1 | 96.5 dB | 5.5e-5 |
+| 2 committed, 3 at test time | fdk-aac and this crate's encoder, HE-AAC v2 | 32–48 kHz | stereo | channel levels within 1.5 dB (a sanity check: faad2's parametric stereo is not ISO's reference's; the conformance streams hold this one to that) | — |
 
-Float rounding is the whole difference: about 2^-23 of full scale, 138 dB
-below a full-scale signal. PNS is random by definition, so its bands are
-compared by energy.
+For AAC-LC float rounding is the whole difference: about 2^-23 of full
+scale, 130–138 dB below a full-scale signal. PNS is random by definition, so
+its bands are compared by energy. The HE-AAC figures are the two decoders'
+distance where the SBR tools fdk-aac's encoder uses (and this crate's does
+not) come in; ISO's references, not faad2, are what the SBR decoder is held
+to.
+
+The tests and CI use no ffmpeg: until 2026-10-02 ffmpeg's decoder was the
+black-box oracle and its encoder made the AAC-LC matrix; ISO's AAC-LC
+conformance streams and faad2 replaced them (which also brought HE-AAC into
+the black-box comparison), and the committed streams were remade without it.
 
 ## Provenance and licensing
 
 Written from the standards' text and published literature; **no AAC
 implementation's source was read** — not FFmpeg's (aacsbr, aacps among it),
 faad2, fdk-aac, FAAC, Helix, symphonia, the MPEG reference software or any
-other — and ffmpeg was used only as a command-line tool, to make and decode
-AAC-LC test streams; nothing in the SBR and PS work was checked against it
-(the HE-AAC figures come from the ISO conformance references and from this
-crate's own round trips). The normative tables were transcribed from a
-copy of ISO/IEC 13818-7:2004 whose use the owner approved.
+other. faad2's decoder and fdk-aac's encoder were used only as black boxes,
+to decode and to make test streams. The normative tables were transcribed
+from a copy of ISO/IEC 13818-7:2004 whose use the owner approved.
 [docs/PROVENANCE.md](docs/PROVENANCE.md) records every source, clause by
 clause and table by table.
 
